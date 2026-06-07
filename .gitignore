@@ -1,0 +1,11 @@
+node_modules/
+.hh-session/
+.idea/
+.env
+config/accounts/*/resume.md
+config/accounts/*/salary.md
+logs/responses-log.jsonl
+logs/responses-*.jsonl
+logs/deepseek-debug.jsonl
+playwright-report/
+test-results/

@@ -1,0 +1,20 @@
+{
+  "name": "hh-application-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Human-in-the-loop helper for reviewing HH.ru vacancies with a saved Playwright session.",
+  "scripts": {
+    "login": "node src/login.js",
+    "review": "node src/review.js",
+    "review:auto": "node src/review.js --limit 200",
+    "review:manual": "node src/review.js --manual",
+    "check": "node src/check.js"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
