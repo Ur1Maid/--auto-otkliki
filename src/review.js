@@ -24,6 +24,7 @@ import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
+import { coverLetterRequired } from './lib/coverLetter.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -875,7 +876,7 @@ async function selectFirstResumeOption(page) {
 
 async function openCoverLetterEditor(page) {
   const pageText = await getVisibleText(page);
-  if (!/сопроводительное письмо обязатель/i.test(pageText)) {
+  if (!coverLetterRequired(pageText)) {
     return false;
   }
 
