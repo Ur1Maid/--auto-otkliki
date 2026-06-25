@@ -28,6 +28,7 @@ import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
 import { cacheKey, getCached, hashResume, loadCache, saveCache, setCached } from './lib/scoreCache.js';
 import { coverLetterRequired } from './lib/coverLetter.js';
 import { isAlreadyApplied } from './lib/applied.js';
+import { isSubmitAllowed } from './lib/applyGuard.js';
 import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTON_TEXTS } from './lib/selectors.js';
 
 
@@ -52,6 +53,7 @@ function parseArgs(argv) {
     resumeSkillsLimit: DEFAULT_RESUME_SKILLS_LIMIT,
     accounts: ['default'],
     autoApply: true,
+    dryRun: false,
     ai: true,
     debugAi: false,
     upgradeResume: false
@@ -75,6 +77,7 @@ function parseArgs(argv) {
     }
     else if (arg === '--yes' || arg === '--auto-apply' || arg === '-y') args.autoApply = true;
     else if (arg === '--manual') args.autoApply = false;
+    else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--ai') args.ai = true;
     else if (arg === '--debug-ai') args.debugAi = true;
     else if (arg === '--upgrade-resume') args.upgradeResume = true;
@@ -1341,7 +1344,10 @@ async function fillDeepSeekFormBatch(page, deepSeekContext, vacancy) {
   return filled;
 }
 
-async function completeApplicationFlow(page, deepSeekContext, vacancy) {
+async function completeApplicationFlow(page, deepSeekContext, vacancy, { dryRun = false } = {}) {
+  // Defense-in-depth: блокируем отправку, если --dry-run активен (на случай вызова иным путём).
+  if (!isSubmitAllowed({ dryRun })) return { status: 'dry_run' };
+
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await dismissHarmlessPopups(page);
 
@@ -1384,7 +1390,7 @@ async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
 
-async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '' } = {}) {
+async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '' } = {}) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(700);
@@ -1443,6 +1449,13 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     return { status: 'skipped', title, relevance };
   }
 
+  // Главный гард --dry-run: скоринг выполнен, но отправка запрещена.
+  // Стоит ДО findResponseButton, клика RESPONSE_BUTTON_TEXTS и completeApplicationFlow.
+  if (!isSubmitAllowed({ dryRun })) {
+    console.log('DRY-RUN: вакансия выше порога — откликнулся бы, но --dry-run активен. Отправку пропускаю.');
+    return { status: 'dry_run', title, relevance };
+  }
+
   if (await pageLooksLikeManualStep(page)) {
     console.log('На странице уже видны признаки анкеты/теста/обязательных вопросов.');
   }
@@ -1471,7 +1484,7 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   }
   await page.waitForTimeout(1200);
 
-  const flowResult = await completeApplicationFlow(page, deepSeekContext, { title, url, text: vacancyText });
+  const flowResult = await completeApplicationFlow(page, deepSeekContext, { title, url, text: vacancyText }, { dryRun });
   if (flowResult.status === 'manual_needed') return { status: 'manual_needed', title };
 
   console.log('Отклик отправлен или технический шаг завершен автоматически.');
@@ -1572,6 +1585,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         const result = await reviewVacancy(page, url, index + 1, vacancies.length, {
           account,
           autoApply: args.autoApply,
+          dryRun: args.dryRun,
           deepSeekContext,
           resumeUpgradeCollector,
           scoreCache,
