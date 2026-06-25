@@ -49,6 +49,13 @@ export function getAccountSalaryPath(account = 'default') {
   return path.join(getAccountConfigDir(account), 'salary.md');
 }
 
+export function getAccountSummaryPath(account = 'default') {
+  const normalized = normalizeAccountName(account);
+  return normalized === 'default'
+    ? path.join(logsDir, 'summary.json')
+    : path.join(logsDir, `summary-${normalized}.json`);
+}
+
 export async function ensureAppDirs() {
   await mkdir(sessionDir, { recursive: true });
   await mkdir(dataDir, { recursive: true });

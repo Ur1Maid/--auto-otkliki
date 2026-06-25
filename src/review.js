@@ -9,6 +9,7 @@ import {
   getAccountResumePath,
   getAccountSalaryPath,
   getAccountStorageStatePath,
+  getAccountSummaryPath,
   inputDir,
   logsDir,
   normalizeAccountName,
@@ -30,6 +31,7 @@ import { coverLetterRequired } from './lib/coverLetter.js';
 import { isAlreadyApplied } from './lib/applied.js';
 import { isSubmitAllowed } from './lib/applyGuard.js';
 import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTON_TEXTS } from './lib/selectors.js';
+import { createRunSummary } from './lib/runSummary.js';
 
 
 const DEFAULT_LIMIT = 200;
@@ -1409,8 +1411,11 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   const cachedRelevance = key ? getCached(scoreCache, key) : null;
 
   let relevance;
+  // scoredBy отражает, какой метод использовался: 'cache' | 'local' | 'model'
+  let scoredBy;
   if (cachedRelevance) {
     relevance = cachedRelevance;
+    scoredBy = 'cache';
     console.log('Релевантность из кэша (0 токенов).');
   } else {
     const local = localRelevanceScore(vacancyText, deepSeekContext.resume);
@@ -1423,8 +1428,10 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
         vacancyText,
         ...deepSeekContext
       });
+      scoredBy = 'model';
     } else {
       relevance = { score: local.score, reason: `локальный скоринг: совпало ${local.overlap}/${local.demanded} навыков` };
+      scoredBy = 'local';
       console.log('DeepSeek по релевантности пропущен: уверенный локальный скоринг (0 токенов).');
     }
     if (key && !relevance.aiFailed) {
@@ -1441,19 +1448,19 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     } else {
       console.log('DeepSeek не смог оценить релевантность. Автоотклик по этой вакансии пропускаю.');
     }
-    return { status: 'manual_needed', title, relevance };
+    return { status: 'manual_needed', title, relevance, scoredBy };
   }
 
   if (relevance.score < deepSeekContext.minScore) {
     console.log(`Пропускаю: ниже порога ${deepSeekContext.minScore}.`);
-    return { status: 'skipped', title, relevance };
+    return { status: 'skipped', title, relevance, scoredBy };
   }
 
   // Главный гард --dry-run: скоринг выполнен, но отправка запрещена.
   // Стоит ДО findResponseButton, клика RESPONSE_BUTTON_TEXTS и completeApplicationFlow.
   if (!isSubmitAllowed({ dryRun })) {
     console.log('DRY-RUN: вакансия выше порога — откликнулся бы, но --dry-run активен. Отправку пропускаю.');
-    return { status: 'dry_run', title, relevance };
+    return { status: 'dry_run', title, relevance, scoredBy };
   }
 
   if (await pageLooksLikeManualStep(page)) {
@@ -1474,21 +1481,21 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     console.log('Автоматический режим: выбираю y.');
   }
 
-  if (command === 'q') return { status: 'quit', title };
-  if (command === 'm') return { status: 'manual_needed', title };
-  if (command !== 'y') return { status: 'skipped', title };
+  if (command === 'q') return { status: 'quit', title, scoredBy };
+  if (command === 'm') return { status: 'manual_needed', title, scoredBy };
+  if (command !== 'y') return { status: 'skipped', title, scoredBy };
 
   if (!(await clickFirstVisibleByText(page, RESPONSE_BUTTON_TEXTS))) {
     console.log('Не смог нажать кнопку отклика: поверх страницы осталось модальное окно или перекрывающий слой.');
-    return { status: 'manual_needed', title };
+    return { status: 'manual_needed', title, scoredBy };
   }
   await page.waitForTimeout(1200);
 
   const flowResult = await completeApplicationFlow(page, deepSeekContext, { title, url, text: vacancyText }, { dryRun });
-  if (flowResult.status === 'manual_needed') return { status: 'manual_needed', title };
+  if (flowResult.status === 'manual_needed') return { status: 'manual_needed', title, scoredBy };
 
   console.log('Отклик отправлен или технический шаг завершен автоматически.');
-  return { status: 'clicked', title };
+  return { status: 'clicked', title, scoredBy };
 }
 
 await ensureAppDirs();
@@ -1567,6 +1574,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
   const scoreCache = await loadCache(scoreCachePath);
   const resumeHash = hashResume(deepSeekContext.resume);
   const { browser, page } = await launchBrowser({ account, useSavedSession: true });
+  const summary = createRunSummary();
 
   try {
     const vacancies = await collectVacanciesForAccount(page, args, account);
@@ -1591,10 +1599,12 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           scoreCache,
           resumeHash
         });
+        summary.record(result);
         await appendLog({ url, ...result }, account);
         if (result.status === 'quit') break;
       } catch (error) {
         console.error(`[${account}] Ошибка на ${url}: ${error.message}`);
+        summary.record({ status: 'error' });
         await appendLog({ url, status: 'error', error: error.message }, account);
       }
     }
@@ -1605,6 +1615,23 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       deepSeekContext,
       skillsLimit: args.resumeSkillsLimit
     });
+
+    // Структурный summary в конце прогона аккаунта.
+    // tokensRunCumulative — глобальный счётчик за весь запуск процесса; при параллельных
+    // аккаунтах (Promise.all) значения интерливятся между аккаунтами — поле намеренно
+    // помечено как «за прогон», не «строго per-account».
+    console.log(`[${account}] ${summary.formatLine()}`);
+    const summaryObj = {
+      account,
+      at: new Date().toISOString(),
+      ...summary.snapshot(),
+      tokensRunCumulative: runUsageCounter.snapshot(),
+    };
+    await writeFile(
+      getAccountSummaryPath(account),
+      JSON.stringify(summaryObj, null, 2),
+      'utf8',
+    ).catch(() => {});
   } finally {
     await saveCache(scoreCachePath, scoreCache);
     // Закрытие — best-effort: ошибка close не должна ронять прогон других аккаунтов.

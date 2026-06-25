@@ -8,6 +8,8 @@ logs/responses-log.jsonl
 logs/responses-*.jsonl
 logs/deepseek-debug.jsonl
 logs/resume-upgrade-*.md
+logs/summary.json
+logs/summary-*.json
 data/*.md
 data/*.txt
 data/score-cache.json
