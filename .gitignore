@@ -7,5 +7,10 @@ config/accounts/*/salary.md
 logs/responses-log.jsonl
 logs/responses-*.jsonl
 logs/deepseek-debug.jsonl
+logs/resume-upgrade-*.md
+data/*.md
+data/*.txt
 playwright-report/
 test-results/
+ralph/logs/
+ralph/STOP
