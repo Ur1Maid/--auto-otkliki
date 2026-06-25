@@ -16,6 +16,7 @@ import {
 } from './config.js';
 import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
+import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -537,25 +538,8 @@ function getMainQuestion(context) {
   return lines[0] || 'без контекста';
 }
 
-function cleanGeneratedAnswer(answer) {
-  return answer
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .replace(/^NO_ANSWER$/i, '')
-    .replace(/^Ответ:\s*/i, '')
-    .replace(/\[Имя\],?\s*/gi, '')
-    .replace(/Меня зовут\s*[,.]?\s*/gi, '')
-    .trim();
-}
-
 function looksLikeEmployerVoice(text) {
   return /ваш опыт релевантен|готов[ыа] пригласить|мы пригласим|рассмотрим вашу кандидатуру|подходите нашей компании|приглашаем вас|будем рады пригласить/i.test(text);
-}
-
-function parseJsonObject(text) {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const candidate = fenced || trimmed.match(/\{[\s\S]*\}/)?.[0] || trimmed;
-  return JSON.parse(candidate);
 }
 
 function optionMatches(left, right) {
