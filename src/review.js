@@ -1607,7 +1607,8 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     });
   } finally {
     await saveCache(scoreCachePath, scoreCache);
-    await browser.close();
+    // Закрытие — best-effort: ошибка close не должна ронять прогон других аккаунтов.
+    await browser.close().catch(() => {});
   }
 }
 
