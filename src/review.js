@@ -32,6 +32,7 @@ import { isAlreadyApplied } from './lib/applied.js';
 import { isSubmitAllowed } from './lib/applyGuard.js';
 import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTON_TEXTS } from './lib/selectors.js';
 import { createRunSummary } from './lib/runSummary.js';
+import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
 
 
 const DEFAULT_LIMIT = 200;
@@ -472,6 +473,28 @@ async function buildResumeUpgradeReport({ account, collector, deepSeekContext, s
   return result.content.trim();
 }
 
+// Машинно-применимые additive-предложения (M6.1) для секции отчёта.
+// Только отчёт: реальная правка resume.md выполняется отдельно (M6.3, resumeWriter),
+// и ТОЛЬКО по навыкам, которые оператор явно одобрил из этого списка. Каждый
+// кандидат несёт requiresRealExperience — добавлять лишь при наличии реального опыта.
+function renderSuggestionsSection(suggestions) {
+  const lines = [
+    '## Машинно-применимые предложения (additive)',
+    '',
+    summarizeSuggestions(suggestions),
+    '',
+    'Навыки-кандидаты на добавление (одобрять вручную, только при реальном опыте):',
+  ];
+  if (suggestions.skillSuggestions.length === 0) {
+    lines.push('- Нет кандидатов выше порога частоты.');
+  } else {
+    for (const s of suggestions.skillSuggestions) {
+      lines.push(`- ${s.skill} — ${s.justification}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 async function finishResumeUpgradeReport({ account, collector, deepSeekContext, skillsLimit }) {
   if (!collector || collector.vacanciesSeen === 0) return;
 
@@ -481,12 +504,26 @@ async function finishResumeUpgradeReport({ account, collector, deepSeekContext, 
     deepSeekContext,
     skillsLimit
   });
+
+  // Структурные additive-предложения (M6.1) — добавляем в отчёт как руководство для
+  // оператора. Сам resume.md здесь НЕ правится (запись — operator-gated, M6.3).
+  const suggestions = buildResumeSuggestions({
+    summary: {
+      vacanciesSeen: collector.vacanciesSeen,
+      relevantVacancies: collector.relevantVacancies,
+      topKeywords: getTopMapEntries(collector.keywordCounts, skillsLimit)
+    },
+    resumeText: deepSeekContext.resume,
+    skillsLimit
+  });
+  const fullReport = `${report}\n\n${renderSuggestionsSection(suggestions)}`;
+
   const reportPath = path.join(logsDir, `resume-upgrade-${account}.md`);
 
-  await writeFile(reportPath, `${report}\n`, 'utf8');
+  await writeFile(reportPath, `${fullReport}\n`, 'utf8');
 
   console.log(`\n=== Resume upgrade report: ${account} ===`);
-  console.log(report);
+  console.log(fullReport);
   console.log(`\nОтчет сохранен: ${reportPath}`);
 }
 
