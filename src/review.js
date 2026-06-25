@@ -23,6 +23,7 @@ import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeCh
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
+import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -1416,12 +1417,21 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   console.log(`\n[${account}] [${index}/${total}] ${title}`);
   console.log(url);
 
-  const relevance = await scoreVacancyWithDeepSeek({
-    title,
-    url,
-    vacancyText,
-    ...deepSeekContext
-  });
+  const local = localRelevanceScore(vacancyText, deepSeekContext.resume);
+  // Локальный reject не должен быть строже порога пользователя: low не выше minScore-1.
+  const localLow = Math.min(40, deepSeekContext.minScore - 1);
+  let relevance;
+  if (needsModelScoring(local, { low: localLow })) {
+    relevance = await scoreVacancyWithDeepSeek({
+      title,
+      url,
+      vacancyText,
+      ...deepSeekContext
+    });
+  } else {
+    relevance = { score: local.score, reason: `локальный скоринг: совпало ${local.overlap}/${local.demanded} навыков` };
+    console.log('DeepSeek по релевантности пропущен: уверенный локальный скоринг (0 токенов).');
+  }
   console.log(`Релевантность: ${relevance.score}/100${relevance.reason ? ` — ${relevance.reason}` : ''}`);
 
   await collectResumeUpgradeSignals(page, resumeUpgradeCollector, { title, url, text: vacancyText }, relevance);
