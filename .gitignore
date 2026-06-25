@@ -10,6 +10,7 @@ logs/deepseek-debug.jsonl
 logs/resume-upgrade-*.md
 data/*.md
 data/*.txt
+data/score-cache.json
 playwright-report/
 test-results/
 ralph/logs/

@@ -24,6 +24,7 @@ import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
+import { cacheKey, getCached, hashResume, loadCache, saveCache, setCached } from './lib/scoreCache.js';
 import { coverLetterRequired } from './lib/coverLetter.js';
 import { isAlreadyApplied } from './lib/applied.js';
 
@@ -62,6 +63,7 @@ const DEFAULT_RELEVANCE_MIN_SCORE = 65;
 const DEFAULT_RESUME_SKILLS_LIMIT = 30;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
+const scoreCachePath = path.join(dataDir, 'score-cache.json');
 
 function parseArgs(argv) {
   const args = {
@@ -1402,7 +1404,7 @@ async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
 
-async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, deepSeekContext, resumeUpgradeCollector } = {}) {
+async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '' } = {}) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(700);
@@ -1417,20 +1419,31 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     return { status: 'already_applied', title };
   }
 
-  const local = localRelevanceScore(vacancyText, deepSeekContext.resume);
-  // Локальный reject не должен быть строже порога пользователя: low не выше minScore-1.
-  const localLow = Math.min(40, deepSeekContext.minScore - 1);
+  const key = scoreCache ? cacheKey(url, resumeHash) : '';
+  const cachedRelevance = key ? getCached(scoreCache, key) : null;
+
   let relevance;
-  if (needsModelScoring(local, { low: localLow })) {
-    relevance = await scoreVacancyWithDeepSeek({
-      title,
-      url,
-      vacancyText,
-      ...deepSeekContext
-    });
+  if (cachedRelevance) {
+    relevance = cachedRelevance;
+    console.log('Релевантность из кэша (0 токенов).');
   } else {
-    relevance = { score: local.score, reason: `локальный скоринг: совпало ${local.overlap}/${local.demanded} навыков` };
-    console.log('DeepSeek по релевантности пропущен: уверенный локальный скоринг (0 токенов).');
+    const local = localRelevanceScore(vacancyText, deepSeekContext.resume);
+    // Локальный reject не должен быть строже порога пользователя: low не выше minScore-1.
+    const localLow = Math.min(40, deepSeekContext.minScore - 1);
+    if (needsModelScoring(local, { low: localLow })) {
+      relevance = await scoreVacancyWithDeepSeek({
+        title,
+        url,
+        vacancyText,
+        ...deepSeekContext
+      });
+    } else {
+      relevance = { score: local.score, reason: `локальный скоринг: совпало ${local.overlap}/${local.demanded} навыков` };
+      console.log('DeepSeek по релевантности пропущен: уверенный локальный скоринг (0 токенов).');
+    }
+    if (key && !relevance.aiFailed) {
+      setCached(scoreCache, key, relevance);
+    }
   }
   console.log(`Релевантность: ${relevance.score}/100${relevance.reason ? ` — ${relevance.reason}` : ''}`);
 
@@ -1558,6 +1571,8 @@ async function collectVacanciesForAccount(page, args, account) {
 async function processAccount(account, args, sharedDeepSeekContext) {
   const deepSeekContext = await buildDeepSeekContextForAccount(account, sharedDeepSeekContext);
   const resumeUpgradeCollector = args.upgradeResume ? createResumeUpgradeCollector(account) : null;
+  const scoreCache = await loadCache(scoreCachePath);
+  const resumeHash = hashResume(deepSeekContext.resume);
   const { browser, page } = await launchBrowser({ account, useSavedSession: true });
 
   try {
@@ -1578,7 +1593,9 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           account,
           autoApply: args.autoApply,
           deepSeekContext,
-          resumeUpgradeCollector
+          resumeUpgradeCollector,
+          scoreCache,
+          resumeHash
         });
         await appendLog({ url, ...result }, account);
         if (result.status === 'quit') break;
@@ -1595,6 +1612,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       skillsLimit: args.resumeSkillsLimit
     });
   } finally {
+    await saveCache(scoreCachePath, scoreCache);
     await browser.close();
   }
 }
