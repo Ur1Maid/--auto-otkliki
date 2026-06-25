@@ -17,3 +17,6 @@ playwright-report/
 test-results/
 ralph/logs/
 ralph/STOP
+
+# Daemon control file (transient)
+DAEMON_STOP

@@ -9,6 +9,7 @@
     "review": "node src/review.js",
     "review:auto": "node src/review.js --limit 200",
     "review:manual": "node src/review.js --manual",
+    "daemon": "node src/daemon.js",
     "check": "node src/check.js",
     "test": "node --test",
     "ralph": "powershell -ExecutionPolicy Bypass -File ralph/ralph.ps1"
