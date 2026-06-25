@@ -1,11 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseThreadList } from '../src/lib/chatParse.js';
+import { parseThreadList, parseThreadMessages, lastEmployerMessage } from '../src/lib/chatParse.js';
 
-// Загружаем синтетическую фикстуру (PII-free, выдуманные данные)
+// Загружаем синтетическую фикстуру списка тредов (PII-free, выдуманные данные)
 const fixtureHtml = readFileSync(
   new URL('./fixtures/chatik-threadlist.html', import.meta.url),
+  'utf8',
+);
+
+// Загружаем синтетическую фикстуру открытого треда (PII-free, выдуманные данные)
+const threadHtml = readFileSync(
+  new URL('./fixtures/chatik-thread.html', import.meta.url),
   'utf8',
 );
 
@@ -130,4 +136,134 @@ test('parseThreadList: хвостовой бейдж после последне
   assert.equal(threads.length, 1);
   assert.equal(threads[0].unread, false, 'хвостовой бейдж не должен делать тред непрочитанным');
   assert.equal(threads[0].unreadCount, 0);
+});
+
+// ===========================================================================
+// parseThreadMessages
+// ===========================================================================
+
+test('parseThreadMessages: возвращает 3 сообщения из фикстуры', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  assert.equal(msgs.length, 3);
+});
+
+test('parseThreadMessages: порядок хронологический (msgId 1001, 1002, 1003)', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  assert.deepEqual(
+    msgs.map((m) => m.msgId),
+    ['1001', '1002', '1003'],
+  );
+});
+
+test('parseThreadMessages: первое сообщение — applicant (наше)', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  assert.equal(msgs[0].author, 'applicant');
+});
+
+test('parseThreadMessages: второе и третье сообщения — employer (входящие)', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  assert.equal(msgs[1].author, 'employer');
+  assert.equal(msgs[2].author, 'employer');
+});
+
+test('parseThreadMessages: msgId — строка из цифр', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  for (const m of msgs) {
+    assert.equal(typeof m.msgId, 'string', `msgId должен быть строкой, got ${typeof m.msgId}`);
+    assert.match(m.msgId, /^\d+$/, `msgId "${m.msgId}" должен состоять из цифр`);
+  }
+});
+
+test('parseThreadMessages: data-qa с суффиксами -text и -applicant-action не считаются контейнерами', () => {
+  // Фикстура содержит chatik-chat-message-1001-text и chatik-chat-message-applicant-action —
+  // они не должны добавлять лишние сообщения.
+  const msgs = parseThreadMessages(threadHtml);
+  // Ожидаем ровно 3 сообщения (1001, 1002, 1003), а не больше.
+  assert.equal(msgs.length, 3, 'суффиксы -text/-applicant-action не должны создавать лишние записи');
+});
+
+test('parseThreadMessages: текст applicant очищен от тегов', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  const applicant = msgs.find((m) => m.author === 'applicant');
+  assert.ok(applicant, 'должно быть сообщение applicant');
+  assert.equal(applicant.text, 'Здравствуйте, заинтересован в вакансии');
+  // Никаких HTML-тегов в тексте
+  assert.ok(!applicant.text.includes('<'), 'текст не должен содержать <');
+  assert.ok(!applicant.text.includes('>'), 'текст не должен содержать >');
+});
+
+test('parseThreadMessages: HTML-сущности (&quot; &amp;) декодируются', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  // msgId=1002: содержит &quot; → "
+  const msg1002 = msgs.find((m) => m.msgId === '1002');
+  assert.ok(msg1002, 'сообщение 1002 должно присутствовать');
+  assert.ok(msg1002.text.includes('"'), 'кавычки &quot; должны декодироваться в "');
+  // msgId=1003: содержит &amp; → &
+  const msg1003 = msgs.find((m) => m.msgId === '1003');
+  assert.ok(msg1003, 'сообщение 1003 должно присутствовать');
+  assert.ok(msg1003.text.includes('&'), 'амперсанд &amp; должен декодироваться в &');
+});
+
+test('parseThreadMessages: несколько <p> и <strong> — теги сняты, текст склеен', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  // msgId=1002 содержит два <p> и <strong>удобно</strong>
+  const msg1002 = msgs.find((m) => m.msgId === '1002');
+  assert.ok(msg1002, 'сообщение 1002 должно присутствовать');
+  // <strong> снят — слово «удобно» всё равно в тексте
+  assert.ok(msg1002.text.includes('удобно'), 'текст из <strong> должен сохраниться');
+  // оба <p> объединены — первый и второй абзацы присутствуют
+  assert.ok(msg1002.text.includes('Спасибо за отклик'), 'первый <p> должен быть в тексте');
+  assert.ok(msg1002.text.includes('созвониться'), 'второй <p> должен быть в тексте');
+  // никаких тегов
+  assert.ok(!msg1002.text.includes('<'), 'в тексте не должно быть HTML-тегов');
+});
+
+// --- parseThreadMessages: защитные случаи ---
+
+test('parseThreadMessages: null → []', () => {
+  assert.deepEqual(parseThreadMessages(null), []);
+});
+
+test('parseThreadMessages: пустая строка → []', () => {
+  assert.deepEqual(parseThreadMessages(''), []);
+});
+
+test('parseThreadMessages: число → []', () => {
+  assert.deepEqual(parseThreadMessages(42), []);
+});
+
+test('parseThreadMessages: HTML без сообщений → []', () => {
+  assert.deepEqual(parseThreadMessages('<div>нет сообщений</div>'), []);
+});
+
+// ===========================================================================
+// lastEmployerMessage
+// ===========================================================================
+
+test('lastEmployerMessage: возвращает текст ПОСЛЕДНЕГО входящего (1003, не 1002)', () => {
+  const msgs = parseThreadMessages(threadHtml);
+  const result = lastEmployerMessage(msgs);
+  // Должно быть сообщение 1003 («Подскажите ваш телефон...»), а не 1002
+  assert.ok(result.includes('телефон'), 'должен вернуться текст последнего входящего (1003)');
+  assert.ok(!result.includes('Спасибо за отклик'), 'не должен вернуться текст первого входящего (1002)');
+});
+
+test('lastEmployerMessage: пустой массив → ""', () => {
+  assert.equal(lastEmployerMessage([]), '');
+});
+
+test('lastEmployerMessage: массив только из applicant → ""', () => {
+  const msgs = [
+    { msgId: '1', author: 'applicant', text: 'Привет' },
+    { msgId: '2', author: 'applicant', text: 'Всё готово' },
+  ];
+  assert.equal(lastEmployerMessage(msgs), '');
+});
+
+test('lastEmployerMessage: не-массив → ""', () => {
+  assert.equal(lastEmployerMessage(null), '');
+  assert.equal(lastEmployerMessage(undefined), '');
+  assert.equal(lastEmployerMessage('строка'), '');
+  assert.equal(lastEmployerMessage(42), '');
+  assert.equal(lastEmployerMessage({}), '');
 });

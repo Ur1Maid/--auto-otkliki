@@ -23,7 +23,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { CHAT_SELECTORS, CHATIK_IFRAME_SELECTOR, CHATIK_URL_PATTERN } from './lib/selectors.js';
-import { parseThreadList } from './lib/chatParse.js';
+import { parseThreadList, parseThreadMessages } from './lib/chatParse.js';
 
 /**
  * Возвращает Playwright-frame чата.
@@ -63,6 +63,24 @@ export async function listThreads(frame) {
     .innerHTML()
     .catch(() => '');
   return parseThreadList(html);
+}
+
+/**
+ * Получает HTML открытого треда из frame чата и парсит его в массив сообщений.
+ *
+ * Контейнер: корневой [data-qa="chatik-layout"] (тот же, что у listThreads) — он включает
+ * и шапку, и список сообщений открытого треда когда тред открыт. Если нужен более узкий
+ * контейнер, оператор может передать другой frame/selector — сейчас берём весь layout.
+ *
+ * @param {import('playwright').Frame | import('playwright').Page} frame
+ * @returns {Promise<Array<{ msgId: string, author: 'employer' | 'applicant', text: string }>>}
+ */
+export async function readThread(frame) {
+  const html = await frame
+    .locator(CHAT_SELECTORS.threadList.layout)
+    .innerHTML()
+    .catch(() => '');
+  return parseThreadMessages(html);
 }
 
 /**
