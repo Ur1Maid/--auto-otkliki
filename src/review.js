@@ -17,6 +17,7 @@ import {
 import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
 import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
+import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -502,40 +503,6 @@ function pickKnowledgeChunks(context, knowledgeBase, limit = 3) {
     .filter((chunk) => chunk.score > 0)
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
-}
-
-function isGenericFieldContext(context) {
-  return /^(text|textarea|input|без контекста)$/i.test(context.trim());
-}
-
-function detectFieldKind(context, pageText = '') {
-  if (/зарплат|заработн|оклад|доход|компенсац|ставк|salary|compensation/i.test(context)) {
-    return 'salary';
-  }
-
-  if (/сопроводительное письмо|письмо работодателю|cover letter/i.test(`${context}\n${pageText}`)) {
-    return 'coverLetter';
-  }
-
-  if (isGenericFieldContext(context)) {
-    return 'unknown';
-  }
-
-  return 'answer';
-}
-
-function isSalaryContext(context) {
-  return detectFieldKind(context) === 'salary';
-}
-
-function getMainQuestion(context) {
-  const lines = context
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !/^task_\d+_text$/i.test(line));
-
-  return lines[0] || 'без контекста';
 }
 
 function looksLikeEmployerVoice(text) {

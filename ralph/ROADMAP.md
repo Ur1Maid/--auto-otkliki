@@ -29,7 +29,7 @@
 можно только извлечённые модули. Каждая задача оставляет `npm test` зелёным и не меняет поведения.
 
 - [x] (M1.1) `src/lib/text.js`: вынести `parseJsonObject`, `cleanGeneratedAnswer`; импортировать в `review.js`. `test/text.test.mjs`: fenced ```json```, JSON с префиксом, мусор → дефолт; снятие кавычек/`NO_ANSWER`/плейсхолдеров. — Acceptance: `npm test` зелёный, `node --check src/review.js` ок.
-- [ ] (M1.2) `src/lib/fields.js`: `detectFieldKind`, `isSalaryContext`, `isGenericFieldContext`, `getMainQuestion`. Тест: ветки salary/coverLetter/answer/unknown. — Acceptance: `npm test` зелёный.
+- [x] (M1.2) `src/lib/fields.js`: `detectFieldKind`, `isSalaryContext`, `isGenericFieldContext`, `getMainQuestion`. Тест: ветки salary/coverLetter/answer/unknown. — Acceptance: `npm test` зелёный.
 - [ ] (M1.3) `src/lib/knowledge.js`: `normalizeText`, `getSearchTerms`, `extractResumeKeywords`, `pickKnowledgeChunks`. Тест: границы слов, отбор top-N. — Acceptance: `npm test` зелёный.
 - [ ] (M1.4) `src/lib/urls.js`: `normalizeHhUrl`, `normalizeVacancyUrl`. Тест: валидные/невалидные vacancy URL, срез query/hash. — Acceptance: `npm test` зелёный.
 - [ ] (M1.5) `src/lib/answers.js`: `optionMatches`, `looksLikeEmployerVoice`, `matchesAnyPattern`. Тест: матчинг опций, детект employer-voice. — Acceptance: `npm test` зелёный.
