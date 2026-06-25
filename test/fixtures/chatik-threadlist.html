@@ -1,0 +1,95 @@
+<!-- Синтетическая фикстура: список тредов chatik.hh.ru.
+     Все компании, ID и тексты — выдуманные. PII отсутствует. -->
+<div data-qa="chatik-layout" class="chatik-layout">
+
+  <!-- Фильтр «только непрочитанные» -->
+  <div class="chatik-filters">
+    <label>
+      <input type="checkbox" data-qa="chatik-checkbox-only-unread">
+      Только непрочитанные
+    </label>
+  </div>
+
+  <!-- Список тредов (виртуализованный скролл) -->
+  <div class="chatik-thread-list">
+
+    <!-- Тред 1: ПРОЧИТАННЫЙ — ООО Ромашка, chatId=5000000001 -->
+    <div class="virtualized-row">
+      <a id="chat-cell-5000000001"
+         class="chat-cell chat-cell--read"
+         data-qa="chatik-open-chat-5000000001"
+         href="/chat/5000000001?hhtmFrom=app">
+        <div class="chat-cell__content">
+          <div data-qa="chat-cell-meta">
+            <span class="chat-cell__company">ООО Ромашка</span>
+            <span class="chat-cell__title">Вакансия: Backend-разработчик</span>
+          </div>
+          <div class="chat-cell__footer">
+            <span class="chat-cell__preview">Спасибо за ваш отклик!</span>
+            <span data-qa="chat-cell-creation-time" class="chat-cell__time">вчера, 14:30</span>
+          </div>
+        </div>
+      </a>
+    </div>
+
+    <!-- Тред 2: ПРОЧИТАННЫЙ — АО Пример, chatId=5000000002 -->
+    <div class="virtualized-row">
+      <a id="chat-cell-5000000002"
+         class="chat-cell chat-cell--read"
+         data-qa="chatik-open-chat-5000000002"
+         href="/chat/5000000002?hhtmFrom=app">
+        <div class="chat-cell__content">
+          <div data-qa="chat-cell-meta">
+            <span class="chat-cell__company">АО Пример</span>
+            <span class="chat-cell__title">Вакансия: DevOps-инженер</span>
+          </div>
+          <div class="chat-cell__footer">
+            <span class="chat-cell__preview">Мы рассмотрели ваше резюме.</span>
+            <span data-qa="chat-cell-creation-time" class="chat-cell__time">2 дня назад</span>
+          </div>
+        </div>
+      </a>
+    </div>
+
+    <!-- Тред 3: НЕПРОЧИТАННЫЙ (1 сообщение) — ЗАО Тестстрой, chatId=5000000003 -->
+    <div class="virtualized-row">
+      <a id="chat-cell-5000000003"
+         class="chat-cell chat-cell--unread"
+         data-qa="chatik-open-chat-5000000003"
+         href="/chat/5000000003?hhtmFrom=app">
+        <div class="chat-cell__content">
+          <div data-qa="chat-cell-meta">
+            <span class="chat-cell__company">ЗАО Тестстрой</span>
+            <span class="chat-cell__title">Вакансия: Системный администратор</span>
+          </div>
+          <div class="chat-cell__footer">
+            <span class="chat-cell__preview">Добрый день! Приглашаем вас...</span>
+            <span data-qa="chat-cell-creation-time" class="chat-cell__time">сегодня, 09:15</span>
+            <span class="magritte-badge_accent" data-qa="chatik-info-badges">1</span>
+          </div>
+        </div>
+      </a>
+    </div>
+
+    <!-- Тред 4: НЕПРОЧИТАННЫЙ (3 сообщения) — ООО КодМастер, chatId=5000000004 -->
+    <div class="virtualized-row">
+      <a id="chat-cell-5000000004"
+         class="chat-cell chat-cell--unread"
+         data-qa="chatik-open-chat-5000000004"
+         href="/chat/5000000004?hhtmFrom=app">
+        <div class="chat-cell__content">
+          <div data-qa="chat-cell-meta">
+            <span class="chat-cell__company">ООО КодМастер</span>
+            <span class="chat-cell__title">Вакансия: Fullstack-разработчик</span>
+          </div>
+          <div class="chat-cell__footer">
+            <span class="chat-cell__preview">Здравствуйте! Готовы обсудить детали.</span>
+            <span data-qa="chat-cell-creation-time" class="chat-cell__time">сегодня, 11:42</span>
+            <span class="magritte-badge_accent" data-qa="chatik-info-badges">3</span>
+          </div>
+        </div>
+      </a>
+    </div>
+
+  </div>
+</div>
