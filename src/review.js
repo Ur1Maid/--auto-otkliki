@@ -21,6 +21,7 @@ import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContex
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
+import { callDeepSeek } from './lib/deepseek.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -392,41 +393,6 @@ async function collectResumeUpgradeSignals(page, collector, vacancy, relevance) 
 async function appendDeepSeekDebug(entry, enabled) {
   if (!enabled) return;
   await appendFile(deepSeekDebugPath, `${JSON.stringify({ ...entry, at: new Date().toISOString() })}\n`).catch(() => {});
-}
-
-async function callDeepSeek({ apiKey, apiUrl, model, messages, temperature = 0.2, maxTokens = 400 }) {
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-      temperature,
-      max_tokens: maxTokens
-    }),
-    signal: AbortSignal.timeout(30000)
-  }).catch((error) => {
-    console.log(`DeepSeek API недоступен: ${error.message}`);
-    return null;
-  });
-
-  if (!response) return { ok: false, status: 0, body: '' };
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    console.log(`DeepSeek API вернул ошибку ${response.status}: ${body.slice(0, 200)}`);
-    return { ok: false, status: response.status, body };
-  }
-
-  const data = await response.json().catch(() => null);
-  return {
-    ok: true,
-    content: data?.choices?.[0]?.message?.content || ''
-  };
 }
 
 function renderResumeUpgradeFallback({ account, summary }) {

@@ -35,7 +35,7 @@
 - [x] (M1.5) `src/lib/answers.js`: `optionMatches`, `looksLikeEmployerVoice`, `matchesAnyPattern`. Тест: матчинг опций, детект employer-voice. — Acceptance: `npm test` зелёный.
 
 ## M2 — DeepSeek-клиент как модуль (фундамент для экономии токенов) ▶ ACTIVE
-- [ ] (M2.1) Вынести `callDeepSeek` в `src/lib/deepseek.js` (сигнатура без изменений): timeout, `!ok`, 402. Тест с замоканным `fetch`. — Acceptance: `npm test` зелёный, ключ не логируется.
+- [x] (M2.1) Вынести `callDeepSeek` в `src/lib/deepseek.js` (сигнатура без изменений): timeout, `!ok`, 402. Тест с замоканным `fetch`. — Acceptance: `npm test` зелёный, ключ не логируется.
 - [ ] (M2.2) Ретрай с backoff на сетевые ошибки/429 (не на 402). Тест на число попыток. — Acceptance: тест зелёный.
 - [ ] (M2.3) Юнит-тест: `appendDeepSeekDebug` никогда не содержит `apiKey`/`Authorization`. — Acceptance: тест зелёный.
 
