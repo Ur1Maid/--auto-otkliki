@@ -18,8 +18,9 @@ import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
 import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
 import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
-import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, normalizeText, pickKnowledgeChunks } from './lib/knowledge.js';
+import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
+import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -289,10 +290,6 @@ async function getVacancyText(page) {
     .slice(0, 9000);
 }
 
-function matchesAnyPattern(text, patterns) {
-  return patterns.some((pattern) => pattern.test(text));
-}
-
 function countMapValue(map, key, amount = 1) {
   if (!key) return;
   map.set(key, (map.get(key) || 0) + amount);
@@ -390,14 +387,6 @@ async function collectResumeUpgradeSignals(page, collector, vacancy, relevance) 
       hhMatches
     });
   }
-}
-
-function looksLikeEmployerVoice(text) {
-  return /ваш опыт релевантен|готов[ыа] пригласить|мы пригласим|рассмотрим вашу кандидатуру|подходите нашей компании|приглашаем вас|будем рады пригласить/i.test(text);
-}
-
-function optionMatches(left, right) {
-  return normalizeText(left) === normalizeText(right);
 }
 
 async function appendDeepSeekDebug(entry, enabled) {

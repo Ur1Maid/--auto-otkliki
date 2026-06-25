@@ -23,7 +23,7 @@
 - [x] (M0.1) `npm test` через `node --test`, smoke-тест `node --check` на всех `src/*.js`.
 - [x] (M0.2) Ralph-скрипты, PROMPT, ROADMAP, PROGRESS, ветка `ralph/auto`.
 
-## M1 — Извлечь чистую логику из `src/review.js` в тестируемые модули ▶ ACTIVE
+## M1 — Извлечь чистую логику из `src/review.js` в тестируемые модули ▶ DONE
 Цель: вынести функции без сайд-эффектов в `src/lib/*` с `export`, переиспользовать их в
 `review.js` (импортом), покрыть unit-тестами. `review.js` исполняется при импорте — тестировать
 можно только извлечённые модули. Каждая задача оставляет `npm test` зелёным и не меняет поведения.
@@ -32,9 +32,9 @@
 - [x] (M1.2) `src/lib/fields.js`: `detectFieldKind`, `isSalaryContext`, `isGenericFieldContext`, `getMainQuestion`. Тест: ветки salary/coverLetter/answer/unknown. — Acceptance: `npm test` зелёный.
 - [x] (M1.3) `src/lib/knowledge.js`: `normalizeText`, `getSearchTerms`, `extractResumeKeywords`, `pickKnowledgeChunks`. Тест: границы слов, отбор top-N. — Acceptance: `npm test` зелёный.
 - [x] (M1.4) `src/lib/urls.js`: `normalizeHhUrl`, `normalizeVacancyUrl`. Тест: валидные/невалидные vacancy URL, срез query/hash. — Acceptance: `npm test` зелёный.
-- [ ] (M1.5) `src/lib/answers.js`: `optionMatches`, `looksLikeEmployerVoice`, `matchesAnyPattern`. Тест: матчинг опций, детект employer-voice. — Acceptance: `npm test` зелёный.
+- [x] (M1.5) `src/lib/answers.js`: `optionMatches`, `looksLikeEmployerVoice`, `matchesAnyPattern`. Тест: матчинг опций, детект employer-voice. — Acceptance: `npm test` зелёный.
 
-## M2 — DeepSeek-клиент как модуль (фундамент для экономии токенов)
+## M2 — DeepSeek-клиент как модуль (фундамент для экономии токенов) ▶ ACTIVE
 - [ ] (M2.1) Вынести `callDeepSeek` в `src/lib/deepseek.js` (сигнатура без изменений): timeout, `!ok`, 402. Тест с замоканным `fetch`. — Acceptance: `npm test` зелёный, ключ не логируется.
 - [ ] (M2.2) Ретрай с backoff на сетевые ошибки/429 (не на 402). Тест на число попыток. — Acceptance: тест зелёный.
 - [ ] (M2.3) Юнит-тест: `appendDeepSeekDebug` никогда не содержит `apiKey`/`Authorization`. — Acceptance: тест зелёный.
