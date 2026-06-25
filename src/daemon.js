@@ -30,6 +30,7 @@ import { isStopRequested, runIsolatedTask } from './lib/isolate.js';
 import { createDailyReport, dailyReportFileName } from './lib/dailyReport.js';
 import { processUnread } from './messages.js';
 import { createProcessedTracker } from './lib/replySend.js';
+import { bumpResume } from './lib/resumeBump.js';
 import { launchBrowser } from './browser.js';
 import { rootDir, logsDir } from './config.js';
 import { confirm } from './prompts.js';
@@ -180,26 +181,53 @@ export async function runMessagesPass(opts, report, tracker) {
   }
 }
 
+// URL страницы со списком резюме кандидата (где живёт нативная кнопка «Поднять в поиске»).
+const RESUMES_URL = 'https://hh.ru/applicant/resumes';
+
 /**
- * Шаг MICRO_EDIT: честная заглушка.
+ * Шаг MICRO_EDIT: поднятие резюме через нативную кнопку hh.ru (M5.1/M5.4).
  *
- * Нативная кнопка обновления резюме на hh.ru требует живого DOM страницы резюме (M5.1).
- * Локальная правка resume.md не триггерит счётчик активности на стороне hh.ru.
- * Шаг пропускается до реализации M5.1.
+ * Для каждого аккаунта открывает страницу резюме и вызывает bumpResume. dryRun
+ * наследуется из opts (по умолчанию true — клика нет). Кулдаун hh.ru определяется
+ * самим classifyBumpButton по тексту кнопки («Обновить можно через …») → в кулдауне
+ * шаг безопасно no-op'ит, поэтому вызывать каждые 30 мин дёшево.
  *
- * @param {object} opts — результат parseDaemonArgs (не используется)
- * @param {object} report — createDailyReport() (не используется — ничего не делали)
+ * Изоляция аккаунта: один сбой не роняет остальные; браузер закрывается в finally.
+ *
+ * Примечание: bumpResume жмёт ОДНУ кнопку (если у аккаунта несколько резюме, locator
+ * матчит несколько → strict-mode → безопасный not_found). Мультирезюме — отдельный шаг.
+ *
+ * @param {object} opts — результат parseDaemonArgs
+ * @param {object} report — createDailyReport()
  * @returns {Promise<void>}
  */
 export async function runMicroEditPass(opts, report) {
-  void opts;
-  void report;
-  console.log(
-    '[daemon] Микро-правки активности требуют нативной кнопки hh.ru (M5.1) — ' +
-    'нужен живой HTML страницы резюме; локальная правка resume.md для очков активности ' +
-    'неэффективна (hh.ru видит резюме на своей стороне). Шаг пропущен.'
-  );
-  // report.recordResumeEdit НЕ вызывается — ничего не делали, не врём в отчёт.
+  console.log(`[daemon] → MICRO_EDIT: поднятие резюме, аккаунты [${opts.accounts.join(', ')}], dryRun=${opts.dryRun}`);
+
+  for (const account of opts.accounts) {
+    let browser;
+    try {
+      const launched = await launchBrowser({ account, useSavedSession: true });
+      browser = launched.browser;
+      const { page } = launched;
+
+      await page.goto(RESUMES_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await page.waitForTimeout(1500).catch(() => {});
+
+      const result = await bumpResume(page, { dryRun: opts.dryRun });
+      console.log(`[daemon] [${account}] Поднятие резюме: ${result.reason} (bumped=${result.bumped})`);
+
+      // В отчёт: applied только при реальном клике (bumped). Кулдаун/dry-run → не applied.
+      report.recordResumeEdit({ account, applied: result.bumped });
+    } catch (err) {
+      // Изоляция аккаунта: один не роняет день.
+      console.error(`[daemon] [${account}] Ошибка поднятия резюме: ${err.message}`);
+    } finally {
+      if (browser) {
+        await browser.close().catch(() => {});
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
