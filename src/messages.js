@@ -1,5 +1,5 @@
 /**
- * src/messages.js — скелет модуля авто-ответов на сообщения hh.ru (chatik).
+ * src/messages.js — модуль авто-ответов на сообщения hh.ru (chatik).
  *
  * Архитектура доступа к чату:
  *   - Чат живёт в cross-origin iframe (CHATIK_IFRAME_SELECTOR) на страницах hh.ru,
@@ -9,21 +9,20 @@
  *
  * Безопасность:
  *   - Входящие письма работодателей — untrusted-ввод (вектор prompt-injection).
- *     Гардрейлы DeepSeek (honesty, NO_ANSWER, candidate-voice) применяются в M4.3/M4.5.
- *   - Reply по умолчанию требует подтверждения от оператора (реализуется в M4.6).
- *
- * Задачи по плану:
- *   M4.2 — навигация и обход тредов
- *   M4.3 — извлечение и анализ сообщений (parser открытого чата)
- *   M4.4 — reply-policy (когда отвечать, когда пропускать)
- *   M4.5 — генерация ответа через DeepSeek с гардрейлами
- *   M4.6 — подтверждение перед отправкой (human-in-the-loop)
- *   M4.7 — отправка сообщения через composer
+ *     Гардрейлы DeepSeek (honesty, NO_ANSWER, candidate-voice) применяются в replyGenerate.js.
+ *   - dryRun по умолчанию true — без явного отключения ничего не отправляется.
+ *   - tracker.add вызывается ТОЛЬКО после успешной отправки (handshake).
+ *   - Текст письма работодателя не пишется в лог (privacy).
  */
 
 import { fileURLToPath } from 'node:url';
 import { CHAT_SELECTORS, CHATIK_IFRAME_SELECTOR, CHATIK_URL_PATTERN } from './lib/selectors.js';
 import { parseThreadList, parseThreadMessages } from './lib/chatParse.js';
+import { decideReply } from './lib/replyPolicy.js';
+import { lastEmployerMessage } from './lib/chatParse.js';
+import { generateReply } from './lib/replyGenerate.js';
+import { sendReply, createProcessedTracker } from './lib/replySend.js';
+import { runIsolated } from './lib/isolate.js';
 
 /**
  * Возвращает Playwright-frame чата.
@@ -84,28 +83,178 @@ export async function readThread(frame) {
 }
 
 /**
- * Оркестрирует обход непрочитанных тредов и генерацию ответов.
+ * Оркестрирует обход непрочитанных тредов и генерацию/отправку ответов.
  *
- * TODO (M4.2–M4.6): реализовать полный цикл:
- *   1. getChatFrame → listThreads → фильтр unread тредов
- *   2. Для каждого треда: открыть, извлечь сообщения (M4.3), применить reply-policy (M4.4)
- *   3. Сгенерировать ответ DeepSeek с гардрейлами (M4.5)
- *   4. Показать оператору preview + подтверждение (M4.6)
- *   5. Отправить через composer (M4.7)
+ * Безопасность:
+ *   - dryRun дефолт true — без явного opts.dryRun=false ничего не отправляется.
+ *   - replyAuto дефолт false — без явного флага требуется подтверждение через confirmFn.
+ *   - tracker.add НА ОТПРАВКУ вызывается ТОЛЬКО после sendResult.sent===true (handshake:
+ *     dry-run/not-confirmed НЕ трекаются, чтобы поздний реальный прогон мог отправить).
+ *     skip- и manual-треды трекаются отдельно — чтобы за сессию не пере-открывать их
+ *     каждую итерацию поллинга (manual — ещё и чтобы не тратить токены DeepSeek повторно).
+ *   - Текст письма работодателя не пишется в лог.
+ *
+ * Счётчики: processed = треды, реально открытые и осмотренные в этом прогоне;
+ *   skipped = не обработанные (идемпотентность ИЛИ policy-skip); manual = на ручную;
+ *   replied = реально отправленные ответы; errors = треды с необработанным исключением.
  *
  * @param {import('playwright').Page} page
- * @param {{ account?: string, dryRun?: boolean }} opts
- * @returns {Promise<void>}
+ * @param {{
+ *   account?: string,
+ *   dryRun?: boolean,
+ *   replyAuto?: boolean,
+ *   deepSeekContext?: {
+ *     apiKey: string,
+ *     apiUrl?: string,
+ *     model?: string,
+ *     resumeProfile?: string,
+ *     salary?: string,
+ *   },
+ *   tracker?: { has(id: string|number): boolean, add(id: string|number): void },
+ *   confirmFn?: (preview: string) => Promise<boolean>,
+ * }} opts
+ * @returns {Promise<{ processed: number, replied: number, skipped: number, manual: number, errors: number }>}
  */
 export async function processUnread(page, opts = {}) {
-  // TODO: реализовать в M4.2–M4.6
-  void page;
-  void opts;
+  const {
+    account = '',
+    dryRun = true,        // ДЕФОЛТ SAFE: ничего не отправляем без явного false
+    replyAuto = false,    // ДЕФОЛТ SAFE: без явного флага требуется подтверждение
+    deepSeekContext = {},
+    confirmFn,
+  } = opts;
+
+  // Используем переданный трекер или создаём локальный для этой сессии.
+  const tracker = opts.tracker ?? createProcessedTracker();
+
+  // 1. Получаем frame чата.
+  const frame = await getChatFrame(page);
+  if (!frame) {
+    console.log('[messages] Чат не найден, пропускаем обработку сообщений');
+    return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0 };
+  }
+
+  // 2. Список тредов — фильтруем только непрочитанные.
+  const threads = await listThreads(frame);
+  const unread = threads.filter((t) => t.unread === true);
+  console.log(`[messages] ${account ? `[${account}] ` : ''}Найдено непрочитанных тредов: ${unread.length}`);
+
+  let processed = 0;
+  let replied = 0;
+  let skipped = 0;
+  let manual = 0;
+  let errors = 0;
+
+  // 3. Обходим непрочитанные треды через runIsolated — один сбой не роняет остальные.
+  const threadResults = await runIsolated(unread, async (thread) => {
+    const { chatId } = thread;
+
+    // a. Идемпотентность: уже обработан в этой сессии.
+    if (tracker.has(chatId)) {
+      skipped++;
+      return;
+    }
+
+    // b. Открываем тред кликом по ячейке (resilient: игнорируем ошибку клика).
+    await frame
+      .locator(`[data-qa="chatik-open-chat-${chatId}"]`)
+      .click()
+      .catch(() => {});
+    // Ждём прогрузки чата — consistent со стилем других DOM-ожиданий в проекте.
+    await page.waitForTimeout(800).catch(() => {});
+
+    // Тред реально открыт и осматривается → засчитываем как processed (единообразно).
+    processed++;
+
+    // c. Читаем сообщения открытого треда.
+    const messages = await readThread(frame);
+
+    // d. Политика ответа.
+    const decision = decideReply(messages);
+
+    if (decision.action === 'skip') {
+      skipped++;
+      tracker.add(chatId); // Помечаем чтобы не пере-сканировать в этой сессии.
+      return;
+    }
+
+    if (decision.action === 'manual') {
+      manual++;
+      // Трекаем, чтобы за сессию не пере-открывать этот тред каждую итерацию поллинга.
+      tracker.add(chatId);
+      // Не логируем текст письма работодателя (privacy).
+      console.log(`[messages] Тред ${chatId}: нужна ручная обработка (${decision.reason})`);
+      return;
+    }
+
+    // e. action === 'needs_model' → генерируем ответ через DeepSeek.
+    if (decision.action === 'needs_model') {
+      // Берём текст последнего сообщения работодателя (untrusted-вход; в лог не пишем).
+      const employerText = lastEmployerMessage(messages);
+
+      // Название вакансии из шапки чата — best-effort, не критично если не нашли.
+      const vacancyTitle = await frame
+        .locator(CHAT_SELECTORS.openChat.vacancyLinkText)
+        .innerText()
+        .catch(() => '');
+
+      const gen = await generateReply({
+        employerMessage: employerText,
+        vacancyTitle,
+        resumeProfile: deepSeekContext.resumeProfile,
+        salary: deepSeekContext.salary,
+        apiKey: deepSeekContext.apiKey,
+        apiUrl: deepSeekContext.apiUrl,
+        model: deepSeekContext.model,
+      });
+
+      // Если модель не смогла дать ответ — отправляем на ручную обработку.
+      if (gen.status !== 'ok') {
+        manual++;
+        // Трекаем: иначе каждый поллинг будет заново тратить токены DeepSeek на тот же тред.
+        tracker.add(chatId);
+        console.log(`[messages] Тред ${chatId}: нет авто-ответа (${gen.status}${gen.reason ? ': ' + gen.reason : ''}), нужна ручная обработка`);
+        return;
+      }
+
+      // Подтверждение оператора. При replyAuto=true сам флаг авторизует отправку в
+      // sendReply (decideSend), confirmed не нужен. Иначе спрашиваем confirmFn.
+      let confirmed = false;
+      if (!replyAuto && typeof confirmFn === 'function') {
+        // Показываем превью оператору (gen.text — наш сгенерированный ответ, не PII работодателя).
+        confirmed = await confirmFn(gen.text).catch(() => false);
+      }
+      // Если нет ни replyAuto, ни confirmFn → confirmed=false → sendReply вернёт not_confirmed.
+
+      const sendResult = await sendReply(frame, gen.text, {
+        dryRun,
+        replyAuto,
+        confirmed,
+        alreadyProcessed: false,
+      });
+
+      if (sendResult.sent) {
+        replied++;
+        // HANDSHAKE: tracker.add ТОЛЬКО после успешной отправки (dry-run/not-confirmed
+        // НЕ трекаются — поздний реальный прогон сможет отправить).
+        tracker.add(chatId);
+      } else {
+        console.log(`[messages] Тред ${chatId}: не отправлено (${sendResult.reason})`);
+      }
+
+      return;
+    }
+  });
+
+  // Считаем ошибки из runIsolated (треды, у которых выбросило необработанное исключение).
+  errors = threadResults.failed;
+
+  return { processed, replied, skipped, manual, errors };
 }
 
 // Точка входа (guard — не запускается при импорте, только при прямом вызове).
-// TODO: реализовать parseArgs, launchBrowser и основной цикл в M4.2.
 if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log('src/messages.js: авто-ответы на сообщения hh.ru — реализация в M4.2–M4.7.');
+  console.log('src/messages.js: авто-ответы на сообщения hh.ru. Используйте processUnread(page, opts) программно.');
+  console.log('Для запуска поллинга передайте page из launchBrowser и вызовите processUnread с opts.dryRun=false явно.');
   process.exit(0);
 }

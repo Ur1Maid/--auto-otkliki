@@ -208,6 +208,8 @@ export function lastEmployerMessage(messages) {
   if (!Array.isArray(messages)) return '';
   let last = '';
   for (const msg of messages) {
+    // Паритет с decideReply: пропускаем битые/не-объектные элементы (не роняем прогон).
+    if (!msg || typeof msg !== 'object') continue;
     if (msg.author === 'employer') last = msg.text;
   }
   return last;

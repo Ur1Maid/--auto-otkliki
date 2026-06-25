@@ -267,3 +267,14 @@ test('lastEmployerMessage: не-массив → ""', () => {
   assert.equal(lastEmployerMessage(42), '');
   assert.equal(lastEmployerMessage({}), '');
 });
+
+test('lastEmployerMessage: битые/null элементы пропускаются (не бросает)', () => {
+  const msgs = [
+    null,
+    'строка',
+    { msgId: '1', author: 'employer', text: 'Здравствуйте' },
+    undefined,
+    { msgId: '2', author: 'employer', text: 'Когда удобно созвониться?' },
+  ];
+  assert.equal(lastEmployerMessage(msgs), 'Когда удобно созвониться?');
+});
