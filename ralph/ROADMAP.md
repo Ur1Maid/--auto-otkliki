@@ -34,12 +34,12 @@
 - [x] (M1.4) `src/lib/urls.js`: `normalizeHhUrl`, `normalizeVacancyUrl`. Тест: валидные/невалидные vacancy URL, срез query/hash. — Acceptance: `npm test` зелёный.
 - [x] (M1.5) `src/lib/answers.js`: `optionMatches`, `looksLikeEmployerVoice`, `matchesAnyPattern`. Тест: матчинг опций, детект employer-voice. — Acceptance: `npm test` зелёный.
 
-## M2 — DeepSeek-клиент как модуль (фундамент для экономии токенов) ▶ ACTIVE
+## M2 — DeepSeek-клиент как модуль (фундамент для экономии токенов) ▶ DONE
 - [x] (M2.1) Вынести `callDeepSeek` в `src/lib/deepseek.js` (сигнатура без изменений): timeout, `!ok`, 402. Тест с замоканным `fetch`. — Acceptance: `npm test` зелёный, ключ не логируется.
 - [x] (M2.2) Ретрай с backoff на сетевые ошибки/429 (не на 402). Тест на число попыток. — Acceptance: тест зелёный.
-- [ ] (M2.3) Юнит-тест: `appendDeepSeekDebug` никогда не содержит `apiKey`/`Authorization`. — Acceptance: тест зелёный.
+- [x] (M2.3) Юнит-тест: `appendDeepSeekDebug` никогда не содержит `apiKey`/`Authorization`. — Acceptance: тест зелёный.
 
-## M3 — Экономия токенов DeepSeek (фича #1: «тратит слишком много») 🎯
+## M3 — Экономия токенов DeepSeek (фича #1: «тратит слишком много») 🎯 ▶ ACTIVE
 **Инсайт по стоимости:** доминирует ВХОДНОЙ объём на скоринге. `scoreVacancyWithDeepSeek`
 (review.js:720) на каждую вакансию шлёт полный текст вакансии (до 9000 симв., `getVacancyText`
 review.js:356) + полное резюме, ×200 ×3 аккаунта ≈ 600 вызовов по ~4000 вход. токенов; вывод 120.

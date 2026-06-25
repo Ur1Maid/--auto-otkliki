@@ -2,6 +2,27 @@
 
 const BASE_DELAY_MS = 500;
 
+// Паттерн для удаления ключей, содержащих секреты, из отладочных записей.
+const SECRET_KEY_RE = /^(api[-_]?key|authorization|bearer|token|secret)$/i;
+
+/**
+ * Возвращает поверхностную копию объекта без ключей, совпадающих с SECRET_KEY_RE.
+ * Если значение ключа — простой объект, рекурсивно очищает и его (один уровень).
+ * Входной объект не мутируется.
+ */
+export function redactSecrets(entry) {
+  const result = {};
+  for (const [k, v] of Object.entries(entry)) {
+    if (SECRET_KEY_RE.test(k)) continue;
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype) {
+      result[k] = redactSecrets(v);
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
+
 function isTransient(status) {
   return status === 0 || status === 429 || status >= 500;
 }

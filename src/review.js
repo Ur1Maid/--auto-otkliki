@@ -21,7 +21,7 @@ import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContex
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
-import { callDeepSeek } from './lib/deepseek.js';
+import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -392,7 +392,7 @@ async function collectResumeUpgradeSignals(page, collector, vacancy, relevance) 
 
 async function appendDeepSeekDebug(entry, enabled) {
   if (!enabled) return;
-  await appendFile(deepSeekDebugPath, `${JSON.stringify({ ...entry, at: new Date().toISOString() })}\n`).catch(() => {});
+  await appendFile(deepSeekDebugPath, `${JSON.stringify({ ...redactSecrets(entry), at: new Date().toISOString() })}\n`).catch(() => {});
 }
 
 function renderResumeUpgradeFallback({ account, summary }) {

@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { callDeepSeek } from '../src/lib/deepseek.js';
+import { callDeepSeek, redactSecrets } from '../src/lib/deepseek.js';
 
 // --- callDeepSeek ---
 
@@ -164,4 +164,66 @@ test('callDeepSeek: sleep вызывается с задержками 500ms и 
   });
 
   assert.deepEqual(delays, [500, 1000]);
+});
+
+// --- redactSecrets ---
+
+test('redactSecrets: удаляет верхнеуровневые секретные ключи (apiKey, api_key, Authorization, bearer, token, secret)', () => {
+  const input = {
+    apiKey: 'sk-123',
+    api_key: 'sk-456',
+    Authorization: 'Bearer sk-789',
+    bearer: 'tok',
+    token: 'abc',
+    secret: 'xyz',
+    phase: 'relevance-request',
+    title: 'Вакансия',
+    score: 80,
+    userPromptPreview: 'preview text',
+  };
+  const result = redactSecrets(input);
+  assert.ok(!('apiKey' in result), 'apiKey должен быть удалён');
+  assert.ok(!('api_key' in result), 'api_key должен быть удалён');
+  assert.ok(!('Authorization' in result), 'Authorization должен быть удалён');
+  assert.ok(!('bearer' in result), 'bearer должен быть удалён');
+  assert.ok(!('token' in result), 'token должен быть удалён');
+  assert.ok(!('secret' in result), 'secret должен быть удалён');
+  assert.equal(result.phase, 'relevance-request');
+  assert.equal(result.title, 'Вакансия');
+  assert.equal(result.score, 80);
+  assert.equal(result.userPromptPreview, 'preview text');
+});
+
+test('redactSecrets: не мутирует входной объект — исходные ключи-секреты остаются', () => {
+  const input = { apiKey: 'sk-123', phase: 'test' };
+  redactSecrets(input);
+  assert.ok('apiKey' in input, 'apiKey должен остаться в оригинале');
+  assert.equal(input.apiKey, 'sk-123');
+});
+
+test('redactSecrets: удаляет совпадающий ключ на один уровень вложенности, сохраняя соседние', () => {
+  const input = {
+    phase: 'nested-test',
+    nested: {
+      apiKey: 'sk-nested',
+      model: 'deepseek-chat',
+      secret: 'hidden',
+    },
+  };
+  const result = redactSecrets(input);
+  assert.ok(!('apiKey' in result.nested), 'apiKey внутри nested должен быть удалён');
+  assert.ok(!('secret' in result.nested), 'secret внутри nested должен быть удалён');
+  assert.equal(result.nested.model, 'deepseek-chat');
+  assert.equal(result.phase, 'nested-test');
+});
+
+test('redactSecrets: типичная реальная отладочная запись проходит без изменений (нет легитимных полей, удалённых редактором)', () => {
+  const entry = {
+    phase: 'relevance-request',
+    title: 'Senior DevOps Engineer',
+    model: 'deepseek-chat',
+    userPromptPreview: 'Оцени релевантность вакансии...',
+  };
+  const result = redactSecrets(entry);
+  assert.deepEqual(result, entry);
 });
