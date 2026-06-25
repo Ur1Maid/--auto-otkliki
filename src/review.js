@@ -25,6 +25,7 @@ import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
 import { coverLetterRequired } from './lib/coverLetter.js';
+import { isAlreadyApplied } from './lib/applied.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -52,13 +53,6 @@ const APPLICATION_FLOW_BUTTON_TEXTS = [
   /^Выбрать резюме$/i
 ];
 
-const APPLIED_PATTERNS = [
-  /отклик отправлен/i,
-  /резюме отправлено/i,
-  /вы откликнулись/i,
-  /отклик уже отправлен/i,
-  /работодатель получит/i
-];
 
 const DEFAULT_LIMIT = 200;
 const DEFAULT_AREA = '1';
@@ -821,7 +815,7 @@ async function pageHasRequiredManualStep(page) {
 
 async function pageLooksApplied(page) {
   const visibleText = await getVisibleText(page);
-  return matchesAnyPattern(visibleText, APPLIED_PATTERNS);
+  return isAlreadyApplied(visibleText);
 }
 
 async function clickFirstVisibleByText(page, texts) {
@@ -1417,6 +1411,11 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   const vacancyText = await getVacancyText(page);
   console.log(`\n[${account}] [${index}/${total}] ${title}`);
   console.log(url);
+
+  if (await pageLooksApplied(page)) {
+    console.log('Уже откликнулись на эту вакансию — скоринг DeepSeek и автоотклик пропускаю (0 токенов).');
+    return { status: 'already_applied', title };
+  }
 
   const local = localRelevanceScore(vacancyText, deepSeekContext.resume);
   // Локальный reject не должен быть строже порога пользователя: low не выше minScore-1.
