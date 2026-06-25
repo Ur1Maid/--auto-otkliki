@@ -601,9 +601,10 @@ async function askDeepSeek({
     return '';
   }
 
-  const knowledgeChunks = kind === 'coverLetter'
+  // coverLetter и salary не получают RAG: coverLetter экономит токены, salary берётся только из salary.md.
+  const knowledgeChunks = (kind === 'coverLetter' || kind === 'salary')
     ? []
-    : pickKnowledgeChunks(`${title}\n${context}\n${vacancyText || ''}`, knowledgeBase, 3);
+    : pickKnowledgeChunks(`${title}\n${context}\n${vacancyText || ''}`, knowledgeBase);
   const knowledgeText = knowledgeChunks.length
     ? knowledgeChunks.map((chunk, index) => `[${index + 1}] ${chunk.file}\n${chunk.text}`).join('\n\n')
     : 'Нет релевантных фрагментов базы знаний.';
@@ -724,7 +725,10 @@ async function askDeepSeekChoice({
     ...group.options.map((option) => option.label)
   ].join('\n');
   const includeSalary = isSalaryContext(context);
-  const knowledgeChunks = pickKnowledgeChunks(`${title}\n${context}\n${vacancyText || ''}`, knowledgeBase, 3);
+  // Для salary-контекста RAG не нужен: ответ берётся только из salary.md.
+  const knowledgeChunks = includeSalary
+    ? []
+    : pickKnowledgeChunks(`${title}\n${context}\n${vacancyText || ''}`, knowledgeBase);
   const knowledgeText = knowledgeChunks.length
     ? knowledgeChunks.map((chunk, index) => `[${index + 1}] ${chunk.file}\n${chunk.text}`).join('\n\n')
     : 'Нет релевантных фрагментов базы знаний.';
@@ -1192,7 +1196,7 @@ async function askDeepSeekForm({ fields, choiceGroups, vacancy, deepSeekContext 
   ].join('\n');
   const needsKnowledge = fields.some((field) => field.kind !== 'coverLetter') || choiceGroups.length > 0;
   const needsSalary = fields.some((field) => field.kind === 'salary') || choiceGroups.some((group) => isSalaryContext(group.question));
-  const knowledgeChunks = needsKnowledge ? pickKnowledgeChunks(allContexts, knowledgeBase, 3) : [];
+  const knowledgeChunks = needsKnowledge ? pickKnowledgeChunks(allContexts, knowledgeBase) : [];
   const knowledgeText = knowledgeChunks.length
     ? knowledgeChunks.map((chunk, index) => `[${index + 1}] ${chunk.file}\n${chunk.text}`).join('\n\n')
     : 'Не использовать базу знаний для этой формы.';

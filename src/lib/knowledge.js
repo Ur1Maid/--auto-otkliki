@@ -84,9 +84,13 @@ export function getSearchTerms(text) {
   return [...new Set(words.filter((word) => !stopWords.has(word)))];
 }
 
-export function pickKnowledgeChunks(context, knowledgeBase, limit = 3) {
+// limit=2 и maxChunkChars=600 — дефолты для экономии токенов (~2.5× по RAG-входу).
+// maxChunkChars усекает текст каждого возвращённого чанка; если передать <=0 или нечисло — усечение не применяется.
+export function pickKnowledgeChunks(context, knowledgeBase, limit = 2, maxChunkChars = 600) {
   const terms = getSearchTerms(context);
   if (terms.length === 0) return [];
+
+  const applyTruncation = typeof maxChunkChars === 'number' && maxChunkChars > 0;
 
   return knowledgeBase
     .map((chunk) => {
@@ -96,5 +100,6 @@ export function pickKnowledgeChunks(context, knowledgeBase, limit = 3) {
     })
     .filter((chunk) => chunk.score > 0)
     .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+    .slice(0, limit)
+    .map((chunk) => applyTruncation ? { ...chunk, text: chunk.text.slice(0, maxChunkChars) } : chunk);
 }
