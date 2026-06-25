@@ -28,32 +28,7 @@ import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
 import { cacheKey, getCached, hashResume, loadCache, saveCache, setCached } from './lib/scoreCache.js';
 import { coverLetterRequired } from './lib/coverLetter.js';
 import { isAlreadyApplied } from './lib/applied.js';
-
-const REQUIRED_MANUAL_PATTERNS = [
-  /пройти тест/i,
-  /тестовое задани[ея]/i,
-  /ответ обязателен/i,
-  /обязательный ответ/i,
-  /заполните обязательные поля/i,
-  /это поле необходимо заполнить/i
-];
-
-const RESPONSE_BUTTON_TEXTS = [
-  /^Откликнуться$/i,
-  /^Откликнуться на вакансию$/i
-];
-
-const APPLICATION_FLOW_BUTTON_TEXTS = [
-  /^Откликнуться$/i,
-  /^Откликнуться на вакансию$/i,
-  /^Отправить$/i,
-  /^Отправить отклик$/i,
-  /^Продолжить$/i,
-  /^Далее$/i,
-  /^Подтвердить$/i,
-  /^Выбрать$/i,
-  /^Выбрать резюме$/i
-];
+import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTON_TEXTS } from './lib/selectors.js';
 
 
 const DEFAULT_LIMIT = 200;
