@@ -1,5 +1,7 @@
 // HTTP-клиент DeepSeek: единая точка вызова chat-completions API.
 
+import { runUsageCounter } from './usageCounter.js';
+
 const BASE_DELAY_MS = 500;
 
 // Паттерн для удаления ключей, содержащих секреты, из отладочных записей.
@@ -79,9 +81,12 @@ export async function callDeepSeek({
     }
 
     const data = await response.json().catch(() => null);
+    const usage = data?.usage ?? null;
+    runUsageCounter.record(usage);
     return {
       ok: true,
-      content: data?.choices?.[0]?.message?.content || ''
+      content: data?.choices?.[0]?.message?.content || '',
+      usage,
     };
   }
 

@@ -23,6 +23,7 @@ import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeCh
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
+import { runUsageCounter } from './lib/usageCounter.js';
 import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
 import { cacheKey, getCached, hashResume, loadCache, saveCache, setCached } from './lib/scoreCache.js';
 import { coverLetterRequired } from './lib/coverLetter.js';
@@ -1636,3 +1637,5 @@ if (args.autoApply) {
     await processAccount(account, args, sharedDeepSeekContext);
   }
 }
+
+console.log(runUsageCounter.formatSummary());
