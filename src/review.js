@@ -17,6 +17,7 @@ import {
 import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
 import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
+import { extractRequirements } from './lib/vacancyExtract.js';
 import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
@@ -522,7 +523,7 @@ async function scoreVacancyWithDeepSeek({ title, url, vacancyText, resume, apiKe
     `URL: ${url}`,
     '',
     'Текст вакансии:',
-    vacancyText,
+    extractRequirements(vacancyText),
     '',
     'Резюме кандидата:',
     resume || 'Резюме не заполнено.'

@@ -28,7 +28,7 @@ export function extractRequirements(vacancyText, maxLen = 1500) {
 
   for (const marker of SECTION_MARKERS) {
     const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = vacancyText.search(new RegExp(escaped, 'i'));
+    const match = vacancyText.search(new RegExp('(?<![а-яёa-z0-9])' + escaped, 'i'));
     if (match !== -1 && (earliest === -1 || match < earliest)) {
       earliest = match;
     }
