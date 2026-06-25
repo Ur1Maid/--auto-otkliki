@@ -56,8 +56,70 @@ const DEFAULT_AREA = '1';
 const DEFAULT_DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
 const DEFAULT_RELEVANCE_MIN_SCORE = 65;
+const DEFAULT_RESUME_SKILLS_LIMIT = 30;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
+
+const RESUME_KEYWORDS = [
+  'Linux',
+  'Kubernetes',
+  'Docker',
+  'Containerd',
+  'Helm',
+  'Helm Charts',
+  'GitLab CI/CD',
+  'GitLab Runner',
+  'CI/CD',
+  'ArgoCD',
+  'GitOps',
+  'Bash',
+  'Python',
+  'Terraform',
+  'Ansible',
+  'Nginx',
+  'PostgreSQL',
+  'Redis',
+  'Kafka',
+  'ClickHouse',
+  'Greenplum',
+  'MPP',
+  'DWH',
+  'Prometheus',
+  'Grafana',
+  'VictoriaMetrics',
+  'Alertmanager',
+  'ELK',
+  'Elasticsearch',
+  'Kibana',
+  'Loki',
+  'Vault',
+  'Harbor',
+  'S3',
+  'Ceph',
+  'MinIO',
+  'Calico',
+  'Ingress',
+  'cert-manager',
+  'TLS',
+  'SSL',
+  'systemd',
+  'cron',
+  'pg_dump',
+  'backup',
+  'monitoring',
+  'logging',
+  'observability',
+  'troubleshooting',
+  'production',
+  'DevSecOps',
+  'security',
+  'IaC',
+  'cloud',
+  'Yandex Cloud',
+  'AWS',
+  'GCP',
+  'Azure'
+];
 
 function parseArgs(argv) {
   const args = {
@@ -67,10 +129,12 @@ function parseArgs(argv) {
     area: DEFAULT_AREA,
     limit: DEFAULT_LIMIT,
     minScore: DEFAULT_RELEVANCE_MIN_SCORE,
+    resumeSkillsLimit: DEFAULT_RESUME_SKILLS_LIMIT,
     accounts: ['default'],
     autoApply: true,
     ai: true,
-    debugAi: false
+    debugAi: false,
+    upgradeResume: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -81,6 +145,7 @@ function parseArgs(argv) {
     else if (arg === '--area') args.area = argv[++index] || DEFAULT_AREA;
     else if (arg === '--limit') args.limit = Number(argv[++index] || args.limit);
     else if (arg === '--min-score') args.minScore = Number(argv[++index] || args.minScore);
+    else if (arg === '--resume-skills-limit') args.resumeSkillsLimit = Number(argv[++index] || args.resumeSkillsLimit);
     else if (arg === '--account') args.accounts = [normalizeAccountName(argv[++index] || 'default')];
     else if (arg === '--accounts') {
       args.accounts = (argv[++index] || 'default')
@@ -92,6 +157,7 @@ function parseArgs(argv) {
     else if (arg === '--manual') args.autoApply = false;
     else if (arg === '--ai') args.ai = true;
     else if (arg === '--debug-ai') args.debugAi = true;
+    else if (arg === '--upgrade-resume') args.upgradeResume = true;
   }
 
   if (!Number.isFinite(args.limit) || args.limit < 1) {
@@ -100,6 +166,10 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(args.minScore) || args.minScore < 0 || args.minScore > 100) {
     throw new Error('Параметр --min-score должен быть числом от 0 до 100.');
+  }
+
+  if (!Number.isFinite(args.resumeSkillsLimit) || args.resumeSkillsLimit < 1 || args.resumeSkillsLimit > 30) {
+    throw new Error('Параметр --resume-skills-limit должен быть числом от 1 до 30.');
   }
 
   if (args.accounts.length === 0) {
@@ -300,6 +370,114 @@ function normalizeText(text) {
   return text.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function countMapValue(map, key, amount = 1) {
+  if (!key) return;
+  map.set(key, (map.get(key) || 0) + amount);
+}
+
+function getTopMapEntries(map, limit = 20) {
+  return [...map.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'ru'))
+    .slice(0, limit)
+    .map(([name, count]) => ({ name, count }));
+}
+
+function extractResumeKeywords(text) {
+  const normalized = normalizeText(text);
+  return RESUME_KEYWORDS.filter((keyword) => {
+    const normalizedKeyword = normalizeText(keyword);
+    const escaped = normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-zа-яё0-9+#.-])${escaped}([^a-zа-яё0-9+#.-]|$)`, 'i').test(normalized);
+  });
+}
+
+function createResumeUpgradeCollector(account) {
+  return {
+    account,
+    vacanciesSeen: 0,
+    relevantVacancies: 0,
+    keywordCounts: new Map(),
+    greenSignalCounts: new Map(),
+    titleCounts: new Map(),
+    examples: []
+  };
+}
+
+async function extractHhMatchSignals(page) {
+  return page.evaluate(() => {
+    const clean = (text) => (text || '').replace(/\s+/g, ' ').trim();
+    const isVisible = (node) => {
+      if (!node || !(node instanceof HTMLElement)) return false;
+      const style = window.getComputedStyle(node);
+      return style.display !== 'none' && style.visibility !== 'hidden' && node.offsetParent !== null;
+    };
+    const parseRgb = (value) => {
+      const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+      if (!match) return null;
+      return {
+        r: Number(match[1]),
+        g: Number(match[2]),
+        b: Number(match[3])
+      };
+    };
+    const isGreenish = (value) => {
+      const rgb = parseRgb(value);
+      if (!rgb) return false;
+      return rgb.g > rgb.r + 20 && rgb.g > rgb.b + 10 && rgb.g > 90;
+    };
+    const result = [];
+
+    for (const element of document.querySelectorAll('body *')) {
+      if (!isVisible(element)) continue;
+      const text = clean(element.textContent);
+      if (text.length < 5 || text.length > 280) continue;
+
+      const style = window.getComputedStyle(element);
+      const green = isGreenish(style.backgroundColor) || isGreenish(style.color) || isGreenish(style.borderColor);
+      const looksLikeMatch = /совпад|подход|резюме|навык|скилл|умени|ключев/i.test(text);
+
+      if (green && looksLikeMatch && !result.includes(text)) {
+        result.push(text);
+      }
+    }
+
+    return result.slice(0, 10);
+  }).catch(() => []);
+}
+
+async function collectResumeUpgradeSignals(page, collector, vacancy, relevance) {
+  if (!collector) return;
+
+  const keywords = extractResumeKeywords(`${vacancy.title}\n${vacancy.text}`);
+  const hhMatches = await extractHhMatchSignals(page);
+
+  collector.vacanciesSeen += 1;
+  if (Number(relevance?.score || 0) >= 65) {
+    collector.relevantVacancies += 1;
+  }
+
+  countMapValue(collector.titleCounts, vacancy.title);
+
+  for (const keyword of keywords) {
+    countMapValue(collector.keywordCounts, keyword);
+  }
+
+  for (const signal of hhMatches) {
+    countMapValue(collector.greenSignalCounts, signal);
+  }
+
+  if (collector.examples.length < 12) {
+    collector.examples.push({
+      title: vacancy.title,
+      url: vacancy.url,
+      relevanceScore: relevance?.score,
+      relevanceReason: relevance?.reason,
+      keywords: keywords.slice(0, 12),
+      hhMatches
+    });
+  }
+}
+
 function getSearchTerms(text) {
   const normalized = normalizeText(text);
   const words = normalized.match(/[a-zа-яё0-9+#.-]{3,}/gi) || [];
@@ -424,6 +602,121 @@ async function callDeepSeek({ apiKey, apiUrl, model, messages, temperature = 0.2
   };
 }
 
+function renderResumeUpgradeFallback({ account, summary }) {
+  const skills = summary.topKeywords.map((item) => `- ${item.name} (${item.count})`).join('\n') || '- Недостаточно данных.';
+  const matches = summary.greenSignals.map((item) => `- ${item.name} (${item.count})`).join('\n') || '- Не найдено.';
+
+  return [
+    `# Resume Upgrade Report: ${account}`,
+    '',
+    `Просмотрено вакансий: ${summary.vacanciesSeen}`,
+    `Релевантных вакансий: ${summary.relevantVacancies}`,
+    '',
+    '## До 30 ключевых навыков-кандидатов',
+    '',
+    skills,
+    '',
+    '## Зеленые hh-сигналы совпадения',
+    '',
+    matches,
+    '',
+    '## Что сделать вручную',
+    '',
+    '- Добавить только те навыки, по которым есть реальный опыт.',
+    '- Не расширять обязанности большими абзацами; лучше добавить 2-4 точные формулировки в опыт.',
+    '- Проверить, чтобы суммарно в блоке навыков было не больше 30 пунктов.'
+  ].join('\n');
+}
+
+async function buildResumeUpgradeReport({ account, collector, deepSeekContext, skillsLimit }) {
+  const summary = {
+    vacanciesSeen: collector.vacanciesSeen,
+    relevantVacancies: collector.relevantVacancies,
+    topKeywords: getTopMapEntries(collector.keywordCounts, skillsLimit),
+    greenSignals: getTopMapEntries(collector.greenSignalCounts, 20),
+    commonTitles: getTopMapEntries(collector.titleCounts, 10),
+    examples: collector.examples
+  };
+
+  const system = [
+    'Ты помогаешь улучшить резюме кандидата после анализа вакансий hh.ru.',
+    'Отвечай markdown без JSON.',
+    'Нужно предложить только точечные добавления в резюме, без переписывания всего резюме.',
+    `В блок ключевых навыков можно рекомендовать максимум ${skillsLimit} навыков.`,
+    'Не расплывайся в обязанностях: максимум 3-5 коротких bullets для опыта.',
+    'Не советуй добавлять навык, если он явно не встречался часто или нет основания из резюме/вакансий.',
+    'Отдельно отметь навыки, которые нельзя добавлять без реального опыта.',
+    'Опирайся на частотность ключевых слов, зеленые hh-сигналы совпадения и текущий resume.md.'
+  ].join(' ');
+
+  const user = [
+    `Аккаунт: ${account}`,
+    '',
+    'Текущее резюме:',
+    deepSeekContext.resume || 'Резюме не заполнено.',
+    '',
+    'Статистика прогона:',
+    JSON.stringify(summary, null, 2),
+    '',
+    'Сформируй отчет с разделами:',
+    '1. Короткий вывод.',
+    `2. Ключевые навыки: список до ${skillsLimit} пунктов, отсортированный по полезности.`,
+    '3. Что добавить в опыт: 3-5 коротких bullets без раздутых обязанностей.',
+    '4. Что НЕ добавлять без реального опыта.',
+    '5. Какие вопросы проверить вручную перед правкой резюме.'
+  ].join('\n');
+
+  await appendDeepSeekDebug({
+    phase: 'resume-upgrade-request',
+    account,
+    topKeywords: summary.topKeywords,
+    greenSignals: summary.greenSignals,
+    userPromptPreview: user.slice(0, 4000)
+  }, deepSeekContext.debugAi);
+
+  const result = await callDeepSeek({
+    apiKey: deepSeekContext.apiKey,
+    apiUrl: deepSeekContext.apiUrl,
+    model: deepSeekContext.model,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ],
+    temperature: 0.1,
+    maxTokens: 1200
+  });
+
+  if (!result.ok || !result.content.trim()) {
+    return renderResumeUpgradeFallback({ account, summary });
+  }
+
+  await appendDeepSeekDebug({
+    phase: 'resume-upgrade-response',
+    account,
+    rawAnswer: result.content
+  }, deepSeekContext.debugAi);
+
+  return result.content.trim();
+}
+
+async function finishResumeUpgradeReport({ account, collector, deepSeekContext, skillsLimit }) {
+  if (!collector || collector.vacanciesSeen === 0) return;
+
+  const report = await buildResumeUpgradeReport({
+    account,
+    collector,
+    deepSeekContext,
+    skillsLimit
+  });
+  const reportPath = path.join(logsDir, `resume-upgrade-${account}.md`);
+
+  await writeFile(reportPath, `${report}\n`, 'utf8');
+
+  console.log(`\n=== Resume upgrade report: ${account} ===`);
+  console.log(report);
+  console.log(`\nОтчет сохранен: ${reportPath}`);
+}
+
 async function scoreVacancyWithDeepSeek({ title, url, vacancyText, resume, apiKey, apiUrl, model, debugAi }) {
   const system = [
     'Ты оцениваешь релевантность вакансии кандидату.',
@@ -464,17 +757,22 @@ async function scoreVacancyWithDeepSeek({ title, url, vacancyText, resume, apiKe
 
   if (!result.ok) {
     await appendDeepSeekDebug({ phase: 'relevance-error', status: result.status, body: result.body?.slice(0, 1000) }, debugAi);
-    return { score: 100, reason: 'relevance_check_failed' };
+    return {
+      score: 0,
+      reason: result.status === 402 ? 'deepseek_insufficient_balance' : 'relevance_check_failed',
+      aiFailed: true,
+      aiStatus: result.status
+    };
   }
 
-  let parsed = { score: 100, reason: 'parse_failed' };
+  let parsed = { score: 0, reason: 'parse_failed' };
   try {
     parsed = parseJsonObject(result.content);
   } catch {}
 
   const score = Number(parsed.score);
   const normalized = {
-    score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 100,
+    score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
     reason: String(parsed.reason || '').slice(0, 300)
   };
 
@@ -732,22 +1030,33 @@ async function pageLooksApplied(page) {
 
 async function clickFirstVisibleByText(page, texts) {
   for (const text of texts) {
-    const button = page.getByRole('button', { name: text }).first();
-    if (
-      (await button.isVisible().catch(() => false)) &&
-      (await button.isEnabled().catch(() => true))
-    ) {
-      await button.click();
-      return true;
-    }
+    for (const locator of [
+      page.getByRole('button', { name: text }),
+      page.getByRole('link', { name: text })
+    ]) {
+      const count = Math.min(await locator.count().catch(() => 0), 8);
 
-    const link = page.getByRole('link', { name: text }).first();
-    if (
-      (await link.isVisible().catch(() => false)) &&
-      (await link.isEnabled().catch(() => true))
-    ) {
-      await link.click();
-      return true;
+      for (let index = count - 1; index >= 0; index -= 1) {
+        const control = locator.nth(index);
+
+        if (
+          !(await control.isVisible().catch(() => false)) ||
+          !(await control.isEnabled().catch(() => true))
+        ) {
+          continue;
+        }
+
+        try {
+          await control.click({ timeout: 2500 });
+          return true;
+        } catch (error) {
+          const message = String(error?.message || '');
+          if (/intercepts pointer events|Timeout \d+ms exceeded|not receive pointer events/i.test(message)) {
+            continue;
+          }
+          throw error;
+        }
+      }
     }
   }
 
@@ -1303,7 +1612,7 @@ async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
 
-async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, deepSeekContext } = {}) {
+async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, deepSeekContext, resumeUpgradeCollector } = {}) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(700);
@@ -1320,6 +1629,17 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     ...deepSeekContext
   });
   console.log(`Релевантность: ${relevance.score}/100${relevance.reason ? ` — ${relevance.reason}` : ''}`);
+
+  await collectResumeUpgradeSignals(page, resumeUpgradeCollector, { title, url, text: vacancyText }, relevance);
+
+  if (relevance.aiFailed) {
+    if (relevance.aiStatus === 402) {
+      console.log('DeepSeek недоступен: недостаточно баланса. Автоотклик по этой вакансии пропускаю.');
+    } else {
+      console.log('DeepSeek не смог оценить релевантность. Автоотклик по этой вакансии пропускаю.');
+    }
+    return { status: 'manual_needed', title, relevance };
+  }
 
   if (relevance.score < deepSeekContext.minScore) {
     console.log(`Пропускаю: ниже порога ${deepSeekContext.minScore}.`);
@@ -1348,7 +1668,10 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   if (command === 'm') return { status: 'manual_needed', title };
   if (command !== 'y') return { status: 'skipped', title };
 
-  await responseButton.click();
+  if (!(await clickFirstVisibleByText(page, RESPONSE_BUTTON_TEXTS))) {
+    console.log('Не смог нажать кнопку отклика: поверх страницы осталось модальное окно или перекрывающий слой.');
+    return { status: 'manual_needed', title };
+  }
   await page.waitForTimeout(1200);
 
   const flowResult = await completeApplicationFlow(page, deepSeekContext, { title, url, text: vacancyText });
@@ -1430,6 +1753,7 @@ async function collectVacanciesForAccount(page, args, account) {
 
 async function processAccount(account, args, sharedDeepSeekContext) {
   const deepSeekContext = await buildDeepSeekContextForAccount(account, sharedDeepSeekContext);
+  const resumeUpgradeCollector = args.upgradeResume ? createResumeUpgradeCollector(account) : null;
   const { browser, page } = await launchBrowser({ account, useSavedSession: true });
 
   try {
@@ -1449,7 +1773,8 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         const result = await reviewVacancy(page, url, index + 1, vacancies.length, {
           account,
           autoApply: args.autoApply,
-          deepSeekContext
+          deepSeekContext,
+          resumeUpgradeCollector
         });
         await appendLog({ url, ...result }, account);
         if (result.status === 'quit') break;
@@ -1458,6 +1783,13 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         await appendLog({ url, status: 'error', error: error.message }, account);
       }
     }
+
+    await finishResumeUpgradeReport({
+      account,
+      collector: resumeUpgradeCollector,
+      deepSeekContext,
+      skillsLimit: args.resumeSkillsLimit
+    });
   } finally {
     await browser.close();
   }
