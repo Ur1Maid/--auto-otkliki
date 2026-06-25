@@ -18,6 +18,7 @@ import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
 import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
 import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
+import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, normalizeText, pickKnowledgeChunks } from './lib/knowledge.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -61,67 +62,6 @@ const DEFAULT_RELEVANCE_MIN_SCORE = 65;
 const DEFAULT_RESUME_SKILLS_LIMIT = 30;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
-
-const RESUME_KEYWORDS = [
-  'Linux',
-  'Kubernetes',
-  'Docker',
-  'Containerd',
-  'Helm',
-  'Helm Charts',
-  'GitLab CI/CD',
-  'GitLab Runner',
-  'CI/CD',
-  'ArgoCD',
-  'GitOps',
-  'Bash',
-  'Python',
-  'Terraform',
-  'Ansible',
-  'Nginx',
-  'PostgreSQL',
-  'Redis',
-  'Kafka',
-  'ClickHouse',
-  'Greenplum',
-  'MPP',
-  'DWH',
-  'Prometheus',
-  'Grafana',
-  'VictoriaMetrics',
-  'Alertmanager',
-  'ELK',
-  'Elasticsearch',
-  'Kibana',
-  'Loki',
-  'Vault',
-  'Harbor',
-  'S3',
-  'Ceph',
-  'MinIO',
-  'Calico',
-  'Ingress',
-  'cert-manager',
-  'TLS',
-  'SSL',
-  'systemd',
-  'cron',
-  'pg_dump',
-  'backup',
-  'monitoring',
-  'logging',
-  'observability',
-  'troubleshooting',
-  'production',
-  'DevSecOps',
-  'security',
-  'IaC',
-  'cloud',
-  'Yandex Cloud',
-  'AWS',
-  'GCP',
-  'Azure'
-];
 
 function parseArgs(argv) {
   const args = {
@@ -368,10 +308,6 @@ function matchesAnyPattern(text, patterns) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
-function normalizeText(text) {
-  return text.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 function countMapValue(map, key, amount = 1) {
   if (!key) return;
   map.set(key, (map.get(key) || 0) + amount);
@@ -382,15 +318,6 @@ function getTopMapEntries(map, limit = 20) {
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'ru'))
     .slice(0, limit)
     .map(([name, count]) => ({ name, count }));
-}
-
-function extractResumeKeywords(text) {
-  const normalized = normalizeText(text);
-  return RESUME_KEYWORDS.filter((keyword) => {
-    const normalizedKeyword = normalizeText(keyword);
-    const escaped = normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^a-zа-яё0-9+#.-])${escaped}([^a-zа-яё0-9+#.-]|$)`, 'i').test(normalized);
-  });
 }
 
 function createResumeUpgradeCollector(account) {
@@ -478,31 +405,6 @@ async function collectResumeUpgradeSignals(page, collector, vacancy, relevance) 
       hhMatches
     });
   }
-}
-
-function getSearchTerms(text) {
-  const normalized = normalizeText(text);
-  const words = normalized.match(/[a-zа-яё0-9+#.-]{3,}/gi) || [];
-  const stopWords = new Set([
-    'что', 'как', 'для', 'или', 'если', 'при', 'это', 'вам', 'ваш', 'ваши',
-    'the', 'and', 'for', 'with', 'you', 'your', 'are', 'what', 'how'
-  ]);
-  return [...new Set(words.filter((word) => !stopWords.has(word)))];
-}
-
-function pickKnowledgeChunks(context, knowledgeBase, limit = 3) {
-  const terms = getSearchTerms(context);
-  if (terms.length === 0) return [];
-
-  return knowledgeBase
-    .map((chunk) => {
-      const text = normalizeText(chunk.text);
-      const score = terms.reduce((total, term) => total + (text.includes(term) ? 1 : 0), 0);
-      return { ...chunk, score };
-    })
-    .filter((chunk) => chunk.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
 }
 
 function looksLikeEmployerVoice(text) {
