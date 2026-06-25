@@ -10,3 +10,4 @@
 2026-06-25 | M1.1 | DONE | src/lib/text.js (parseJsonObject, cleanGeneratedAnswer) + test/text.test.mjs (12). implementer(Sonnet)→code-reviewer(APPROVE)→npm test 19/19. looksLikeEmployerVoice оставлен (M1.5).
 2026-06-25 | M1.2 | DONE | src/lib/fields.js (detectFieldKind, isSalaryContext, isGenericFieldContext, getMainQuestion) + test/fields.test.mjs (22). implementer(Sonnet)→code-reviewer(APPROVE w/nits, blank-line fixed)→npm test 41/41.
 2026-06-25 | M1.3 | DONE | src/lib/knowledge.js (RESUME_KEYWORDS[58], normalizeText, getSearchTerms, extractResumeKeywords, pickKnowledgeChunks) + test/knowledge.test.mjs (15). implementer→code-reviewer(APPROVE)→npm test 56/56.
+2026-06-25 | M1.4 | DONE | src/lib/urls.js (normalizeHhUrl, normalizeVacancyUrl) + test/urls.test.mjs (6). implementer→self-review оркестратора (тривиальные URL-функции, byte-identical)→npm test 62/62.

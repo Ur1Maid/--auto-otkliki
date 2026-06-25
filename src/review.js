@@ -19,6 +19,7 @@ import { ask } from './prompts.js';
 import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
 import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, normalizeText, pickKnowledgeChunks } from './lib/knowledge.js';
+import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 
 const REQUIRED_MANUAL_PATTERNS = [
   /пройти тест/i,
@@ -225,22 +226,6 @@ async function loadKnowledgeBase(directory) {
   }
 
   return chunks;
-}
-
-function normalizeHhUrl(url) {
-  const parsed = new URL(url, 'https://hh.ru');
-  parsed.hash = '';
-  return parsed.toString();
-}
-
-function normalizeVacancyUrl(url) {
-  const parsed = new URL(url, 'https://hh.ru');
-  const match = parsed.pathname.match(/^\/vacancy\/\d+/);
-  if (!match) return '';
-  parsed.pathname = match[0];
-  parsed.search = '';
-  parsed.hash = '';
-  return parsed.toString();
 }
 
 async function collectFromSearch(page, searchUrl, limit) {
