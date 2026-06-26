@@ -31,6 +31,7 @@ import { createDailyReport, dailyReportFileName } from './lib/dailyReport.js';
 import { processUnread } from './messages.js';
 import { createProcessedTracker } from './lib/replySend.js';
 import { bumpResume } from './lib/resumeBump.js';
+import { loadAccountProfile } from './lib/accountProfile.js';
 import { launchBrowser } from './browser.js';
 import { rootDir, logsDir } from './config.js';
 import { confirm } from './prompts.js';
@@ -38,6 +39,10 @@ import { parseDaemonArgs, buildReviewChildArgs } from './lib/daemonArgs.js';
 
 // Путь к review.js — дочерний процесс apply-прогона.
 const REVIEW_JS = path.join(rootDir, 'src', 'review.js');
+
+// Дефолты DeepSeek (совпадают с review.js) — нужны generateReply в ответах на сообщения.
+const DEFAULT_DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
+const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
 
 // STOP-файл демона (отдельный от ralph/STOP).
 const DAEMON_STOP_FILE = path.join(rootDir, 'DAEMON_STOP');
@@ -136,11 +141,17 @@ export async function runMessagesPass(opts, report, tracker) {
       browser = launched.browser;
       const { page } = launched;
 
-      // Строим минимальный deepSeekContext — ключ передаётся, но не логируется.
+      // Полный deepSeekContext: ключ + URL/модель + профиль аккаунта (резюме/зарплата),
+      // иначе generateReply не имеет ни эндпоинта, ни данных кандидата → всё в manual.
+      // Профиль скоупится по аккаунту (loadAccountProfile) — без утечки между аккаунтами.
+      // Ключ не логируется (processUnread его не пишет).
+      const { resumeProfile, salary } = await loadAccountProfile(account);
       const deepSeekContext = {
-        apiKey, // не попадёт в логи — processUnread не пишет ключ
-        // resumeProfile и salary — не загружаем здесь (нет резолвера без fs + account config);
-        // generateReply деградирует до manual при пустых полях.
+        apiKey,
+        apiUrl: process.env.DEEPSEEK_API_URL || DEFAULT_DEEPSEEK_API_URL,
+        model: process.env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL,
+        resumeProfile,
+        salary,
       };
 
       // confirmFn: если не replyAuto — спрашиваем оператора через промпт.
