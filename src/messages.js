@@ -139,8 +139,8 @@ export async function processUnread(page, opts = {}) {
     deepSeekContext = {},
     confirmFn,
     // Анти-бот-пейсинг: рандомная пауза после реально отправленного ответа (сек→мс).
-    minDelayMs = 20000,
-    maxDelayMs = 90000,
+    minDelayMs = 2000,
+    maxDelayMs = 7000,
   } = opts;
 
   // Используем переданный трекер или создаём локальный для этой сессии.

@@ -45,8 +45,8 @@ const DEFAULT_RELEVANCE_MIN_SCORE = 65;
 const DEFAULT_RESUME_SKILLS_LIMIT = 30;
 // Анти-бот-пейсинг: рандомная пауза между откликами (сек). Применяется только
 // в боевом режиме (не в --dry-run). Настраивается через --min-delay / --max-delay.
-const DEFAULT_MIN_DELAY_SEC = 20;
-const DEFAULT_MAX_DELAY_SEC = 90;
+const DEFAULT_MIN_DELAY_SEC = 2;
+const DEFAULT_MAX_DELAY_SEC = 7;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
