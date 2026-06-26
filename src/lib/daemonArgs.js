@@ -32,10 +32,12 @@
  *   dryRun: boolean,
  *   replyAuto: boolean,
  *   once: boolean,
+ *   task: '' | 'apply' | 'messages' | 'resume',
  *   messagesPollMinutes: number,
  *   microEditMinutes: number,
  * }}
- * @throws {Error} если --limit задан мусором, нулём или отрицательным числом.
+ * @throws {Error} если --limit задан мусором, нулём или отрицательным числом,
+ *   либо если --task задан неизвестным значением.
  */
 export function parseDaemonArgs(argv) {
   const args = {
@@ -47,6 +49,7 @@ export function parseDaemonArgs(argv) {
     dryRun: true,           // ДЕФОЛТ SAFE: live-режим только по явному opt-in
     replyAuto: false,       // ДЕФОЛТ SAFE
     once: false,
+    task: '',               // '' = цикл-планировщик; иначе один шаг и выход (для внешнего шедулера)
     messagesPollMinutes: 15,
     microEditMinutes: 30,
   };
@@ -93,6 +96,22 @@ export function parseDaemonArgs(argv) {
 
     } else if (arg === '--once') {
       args.once = true;
+
+    } else if (arg === '--task') {
+      // Один шаг и выход — режим для внешнего шедулера (cron / Task Scheduler).
+      // Алиасы: micro-edit/bump → resume; poll → messages.
+      const raw = (safeArgv[++i] || '').trim().toLowerCase();
+      const normalized =
+        raw === 'micro-edit' || raw === 'bump' ? 'resume'
+        : raw === 'poll' ? 'messages'
+        : raw;
+      const allowed = ['apply', 'messages', 'resume'];
+      if (!allowed.includes(normalized)) {
+        throw new Error(
+          `Параметр --task должен быть одним из: ${allowed.join(', ')} (получено: ${raw || '<пусто>'})`
+        );
+      }
+      args.task = normalized;
 
     } else if (arg === '--messages-interval') {
       const raw = safeArgv[++i];

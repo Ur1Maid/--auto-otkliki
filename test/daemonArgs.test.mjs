@@ -28,6 +28,28 @@ test('parseDaemonArgs: undefined → дефолты (не бросает)', () =
   assert.equal(opts.limit, 200);
 });
 
+test('parseDaemonArgs: task дефолт "" (режим цикла)', () => {
+  const opts = parseDaemonArgs([]);
+  assert.equal(opts.task, '');
+});
+
+test('parseDaemonArgs: --task apply|messages|resume → task установлен', () => {
+  assert.equal(parseDaemonArgs(['--task', 'apply']).task, 'apply');
+  assert.equal(parseDaemonArgs(['--task', 'messages']).task, 'messages');
+  assert.equal(parseDaemonArgs(['--task', 'resume']).task, 'resume');
+});
+
+test('parseDaemonArgs: --task алиасы (poll→messages, bump/micro-edit→resume, регистр)', () => {
+  assert.equal(parseDaemonArgs(['--task', 'poll']).task, 'messages');
+  assert.equal(parseDaemonArgs(['--task', 'bump']).task, 'resume');
+  assert.equal(parseDaemonArgs(['--task', 'micro-edit']).task, 'resume');
+  assert.equal(parseDaemonArgs(['--task', 'APPLY']).task, 'apply');
+});
+
+test('parseDaemonArgs: --task с мусором → бросает', () => {
+  assert.throws(() => parseDaemonArgs(['--task', 'wat']), /должен быть одним из/);
+});
+
 test('parseDaemonArgs: null → дефолты (не бросает)', () => {
   const opts = parseDaemonArgs(null);
   assert.equal(opts.dryRun, true);

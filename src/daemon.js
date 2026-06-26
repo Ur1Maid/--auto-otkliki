@@ -13,10 +13,17 @@
  *   Без явного --no-dry-run / --live ни один отклик, ответ или правка не уйдут наружу.
  *   Live-режим активируется только явным opt-in с заметным предупреждением в логе.
  *
- * Запуск:
+ * Запуск (режим цикла-планировщика, держит процесс открытым):
  *   node src/daemon.js [--accounts acc1,acc2] [--text DevOps] [--area 1] [--limit 200]
  *                      [--no-dry-run | --live] [--reply-auto] [--once]
  *                      [--messages-interval 15] [--micro-edit-interval 30]
+ *
+ * Запуск (режим ОДНОГО шага и выхода — для внешнего шедулера cron / Task Scheduler):
+ *   node src/daemon.js --task messages   # прочитать все письма (каждые 10 мин)
+ *   node src/daemon.js --task resume      # обновить/поднять резюме (каждые 30 мин)
+ *   node src/daemon.js --task apply --limit 200   # пачка откликов (08:00 МСК)
+ *   С --task процесс НЕ крутится: делает один шаг, пишет дневной отчёт и выходит.
+ *   Рабочие часы МСК НЕ проверяются (временем управляет шедулер ОС).
  */
 
 import { writeFile } from 'node:fs/promises';
@@ -30,7 +37,7 @@ import { isStopRequested, runIsolatedTask } from './lib/isolate.js';
 import { createDailyReport, dailyReportFileName } from './lib/dailyReport.js';
 import { processUnread } from './messages.js';
 import { createProcessedTracker } from './lib/replySend.js';
-import { bumpResume } from './lib/resumeBump.js';
+import { microEditResume } from './lib/resumeEdit.js';
 import { loadAccountProfile } from './lib/accountProfile.js';
 import { launchBrowser } from './browser.js';
 import { rootDir, logsDir } from './config.js';
@@ -192,28 +199,22 @@ export async function runMessagesPass(opts, report, tracker) {
   }
 }
 
-// URL страницы со списком резюме кандидата (где живёт нативная кнопка «Поднять в поиске»).
-const RESUMES_URL = 'https://hh.ru/applicant/resumes';
-
 /**
- * Шаг MICRO_EDIT: поднятие резюме через нативную кнопку hh.ru (M5.1/M5.4).
+ * Шаг MICRO_EDIT: обновление резюме реальной микро-правкой текста «опыта работы».
  *
- * Для каждого аккаунта открывает страницу резюме и вызывает bumpResume. dryRun
- * наследуется из opts (по умолчанию true — клика нет). Кулдаун hh.ru определяется
- * самим classifyBumpButton по тексту кнопки («Обновить можно через …») → в кулдауне
- * шаг безопасно no-op'ит, поэтому вызывать каждые 30 мин дёшево.
+ * Для каждого аккаунта открывает резюме и вызывает microEditResume: toggle финальной
+ * точки в описании первого опыта → hh.ru обновляет дату резюме при сохранении. dryRun
+ * наследуется из opts (по умолчанию true — только превью, без сохранения).
  *
  * Изоляция аккаунта: один сбой не роняет остальные; браузер закрывается в finally.
- *
- * Примечание: bumpResume жмёт ОДНУ кнопку (если у аккаунта несколько резюме, locator
- * матчит несколько → strict-mode → безопасный not_found). Мультирезюме — отдельный шаг.
+ * В лог пишем только «хвост» описания (microEditResume) — не весь текст резюме (PII).
  *
  * @param {object} opts — результат parseDaemonArgs
  * @param {object} report — createDailyReport()
  * @returns {Promise<void>}
  */
 export async function runMicroEditPass(opts, report) {
-  console.log(`[daemon] → MICRO_EDIT: поднятие резюме, аккаунты [${opts.accounts.join(', ')}], dryRun=${opts.dryRun}`);
+  console.log(`[daemon] → MICRO_EDIT: правка резюме, аккаунты [${opts.accounts.join(', ')}], dryRun=${opts.dryRun}`);
 
   for (const account of opts.accounts) {
     let browser;
@@ -222,23 +223,84 @@ export async function runMicroEditPass(opts, report) {
       browser = launched.browser;
       const { page } = launched;
 
-      await page.goto(RESUMES_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
-      await page.waitForTimeout(1500).catch(() => {});
+      const result = await microEditResume(page, { dryRun: opts.dryRun });
+      const diff = result.change ? ` [${result.change}: "${result.beforeTail}" → "${result.afterTail}"]` : '';
+      console.log(`[daemon] [${account}] Правка резюме: ${result.reason} (changed=${result.changed})${diff}`);
 
-      const result = await bumpResume(page, { dryRun: opts.dryRun });
-      console.log(`[daemon] [${account}] Поднятие резюме: ${result.reason} (bumped=${result.bumped})`);
-
-      // В отчёт: applied только при реальном клике (bumped). Кулдаун/dry-run → не applied.
-      report.recordResumeEdit({ account, applied: result.bumped });
+      // В отчёт: applied только при реально сохранённой правке. dry-run → не applied.
+      report.recordResumeEdit({ account, applied: result.changed });
     } catch (err) {
       // Изоляция аккаунта: один не роняет день.
-      console.error(`[daemon] [${account}] Ошибка поднятия резюме: ${err.message}`);
+      console.error(`[daemon] [${account}] Ошибка правки резюме: ${err.message}`);
     } finally {
       if (browser) {
         await browser.close().catch(() => {});
       }
     }
   }
+}
+
+/**
+ * Записывает дневной отчёт в logs/ (best-effort — IO-сбой не роняет демон).
+ *
+ * @param {object} report — createDailyReport()
+ * @returns {Promise<void>}
+ */
+async function writeDailyReport(report) {
+  try {
+    const now = new Date();
+    const fileName = dailyReportFileName(now);
+    const filePath = path.join(logsDir, fileName);
+    const data = report.snapshot(now);
+    await writeFile(filePath, JSON.stringify(data, null, 2));
+    console.log(`[daemon] Дневной отчёт записан: ${filePath}`);
+  } catch (err) {
+    // best-effort — не роняем демон из-за IO
+    console.error('[daemon] Не удалось записать дневной отчёт:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Режим одного шага (--task) — для внешнего шедулера
+// ---------------------------------------------------------------------------
+
+/**
+ * Выполняет ОДИН шаг (apply | messages | resume) и выходит. Рабочие часы МСК
+ * не проверяются: расписанием управляет внешний шедулер (cron / Task Scheduler).
+ * Это «демон запускает программу», а не крутится постоянно — дёшево по ресурсам на сервере.
+ *
+ * @param {object} opts — результат parseDaemonArgs (opts.task задан)
+ * @returns {Promise<void>}
+ */
+export async function runSingleTask(opts) {
+  const report = createDailyReport();
+  const tracker = createProcessedTracker();
+
+  console.log(`[daemon] Режим одного шага: --task ${opts.task} (без цикла, выход после шага).`);
+
+  let result;
+  switch (opts.task) {
+    case 'apply':
+      result = await runIsolatedTask(runApplyPass, opts, report);
+      break;
+    case 'messages':
+      result = await runIsolatedTask(runMessagesPass, opts, report, tracker);
+      break;
+    case 'resume':
+      result = await runIsolatedTask(runMicroEditPass, opts, report);
+      break;
+    default:
+      console.error(`[daemon] Неизвестный --task: ${opts.task}`);
+      return;
+  }
+
+  if (result && !result.ok) {
+    console.error(`[daemon] Шаг ${opts.task} завершился с ошибкой:`, result.error.message);
+  }
+
+  await writeDailyReport(report);
+  console.log(`[daemon] Итог шага: ${report.formatLine()}`);
+  console.log('[daemon] Завершение (--task).');
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +315,15 @@ export async function runMicroEditPass(opts, report) {
  */
 export async function main() {
   const opts = parseDaemonArgs(process.argv.slice(2));
+
+  // Грузим .env (как review.js/check.js): шаг messages читает DEEPSEEK_API_KEY из process.env.
+  // Без этого generateReply не имеет ключа → все треды уходят в manual (0 ответов).
+  // Ключ не логируем. .env может отсутствовать — переменные могут быть заданы в окружении.
+  try {
+    process.loadEnvFile(path.join(rootDir, '.env'));
+  } catch {
+    // .env отсутствует — не критично, ключ может прийти из окружения.
+  }
 
   // --- Лог старта ---
   console.log('[daemon] ====================================');
@@ -270,6 +341,12 @@ export async function main() {
     console.log('[daemon] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
     console.log('[daemon] ВНИМАНИЕ: LIVE-РЕЖИМ. Действия уйдут наружу на hh.ru!');
     console.log('[daemon] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+  }
+
+  // Режим одного шага: делаем ровно один шаг и выходим (внешний шедулер управляет временем).
+  if (opts.task) {
+    await runSingleTask(opts);
+    return;
   }
 
   if (opts.once) {
@@ -406,17 +483,7 @@ export async function main() {
   // ---------------------------------------------------------------------------
   // Дневной отчёт
   // ---------------------------------------------------------------------------
-  try {
-    const now = new Date();
-    const fileName = dailyReportFileName(now);
-    const filePath = path.join(logsDir, fileName);
-    const data = report.snapshot(now);
-    await writeFile(filePath, JSON.stringify(data, null, 2));
-    console.log(`[daemon] Дневной отчёт записан: ${filePath}`);
-  } catch (err) {
-    // best-effort — не роняем демон из-за IO
-    console.error('[daemon] Не удалось записать дневной отчёт:', err.message);
-  }
+  await writeDailyReport(report);
 
   console.log(`[daemon] Итог дня: ${report.formatLine()}`);
   console.log('[daemon] Завершение.');
