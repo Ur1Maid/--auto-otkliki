@@ -6,13 +6,16 @@ security) and scaled to this single project.
 
 ## What this is
 A Node.js (ESM, `>=20`) CLI that drives **hh.ru** via **Playwright** and fills application forms
-using the **DeepSeek** API. Multi-account, human-in-the-loop. No build step, no test suite (yet).
+using the **DeepSeek** API. Multi-account, human-in-the-loop. No build step; pure-module tests via
+`node --test` (`test/*.test.mjs`, ~860 cases — see `.claude/rules/testing.md`).
 
-- Entry points: `src/login.js` (save session), `src/review.js` (main flow), `src/check.js` (env check).
+- Entry points: `src/login.js` (save session), `src/review.js` (main flow), `src/check.js` (env check),
+  `src/daemon.js` (scheduler / one-shot `--task` for external cron), `src/dashboard.js` (local metrics panel).
 - Support: `src/browser.js` (Playwright launch + popups), `src/config.js` (paths/accounts),
   `src/prompts.js` (CLI prompts).
-- Accounts: `config/accounts/<name>/{resume.md,salary.md}`; sessions in `.hh-session/`; logs in
-  `logs/*.jsonl`; DeepSeek knowledge base in `data/`.
+- Accounts: `config/accounts/<name>/{resume.md,salary.md,preferences.txt}` (preferences = structured
+  candidate prefs woven into prompts); sessions in `.hh-session/`; logs in `logs/*.jsonl`
+  (incl. `alerts.jsonl`); shared vacancy score-cache in `data/score-cache.json`; DeepSeek KB in `data/`.
 
 ## Agents — Opus orchestrates & verifies, Sonnet writes
 Defined in `.claude/agents/`. For any non-trivial change, delegate through this pipeline:
@@ -70,9 +73,14 @@ implements → Opus reviews), runs `npm test`, commits, and ticks `[x]`. Shared 
 ## Commands (Windows PowerShell)
 ```powershell
 npm.cmd run check                                   # env sanity
+npm.cmd test                                         # node --test (pure modules; ~860 cases)
 npm.cmd run login -- --account <name>               # save a session (headful)
 npm.cmd run review:manual -- --account <name> --text DevOps --area 1 --limit 5   # safe dry run
 npm.cmd run review -- --accounts acc1,acc2 --text DevOps --area 1 --limit 200    # full run
+npm.cmd run dashboard                                # local metrics panel → http://127.0.0.1:8787
+node src/daemon.js --task messages --account <name>  # one-shot step for external scheduler
 ```
-Use `--text`/`--area` (not a `&`-containing URL); use `npm.cmd`/`npx.cmd`. There is no lint/test
-script — verify with `node --check <file>` and targeted manual (`--manual`) runs.
+Use `--text`/`--area` (not a `&`-containing URL); use `npm.cmd`/`npx.cmd`. Verify changes with
+`npm.cmd test` + `node --check <file>` and targeted manual (`--manual`) runs. Optional daemon
+alert webhook: set `ALERT_WEBHOOK_URL` in `.env` (off by default; alerts also go to
+`logs/alerts.jsonl`).
