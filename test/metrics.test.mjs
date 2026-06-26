@@ -7,6 +7,7 @@ import {
   aggregateDaily,
   estimateCost,
   computeFunnel,
+  aggregateAlerts,
   APPLIED_STATUS,
 } from '../src/lib/metrics.js';
 
@@ -135,4 +136,41 @@ test('computeFunnel: ноль откликов → конверсия 0 (не д
   const f = computeFunnel({ applied: 0, messagesProcessed: 0, replied: 0 });
   assert.equal(f.conversionPct, 0);
   assert.equal(f.replyRatePct, 0);
+});
+
+// --- aggregateAlerts ---
+test('aggregateAlerts: считает byLevel/byCode, отдаёт recent (новые сверху)', () => {
+  const a = aggregateAlerts([
+    { at: '2026-06-26T08:00:00Z', level: 'warn', code: 'api_errors', message: 'a' },
+    { at: '2026-06-26T09:00:00Z', level: 'critical', code: 'deepseek_balance', message: 'b' },
+    { at: '2026-06-26T10:00:00Z', level: 'critical', code: 'flow_broken', message: 'c' },
+  ]);
+  assert.equal(a.total, 3);
+  assert.equal(a.byLevel.critical, 2);
+  assert.equal(a.byLevel.warn, 1);
+  assert.equal(a.byCode.deepseek_balance, 1);
+  assert.equal(a.recent[0].message, 'c'); // хвост = самые свежие, reverse → новые сверху
+  assert.equal(a.recent[2].message, 'a');
+});
+
+test('aggregateAlerts: limit ограничивает recent последними N', () => {
+  const entries = Array.from({ length: 30 }, (_, i) => ({ at: null, level: 'warn', code: 'x', message: String(i) }));
+  const a = aggregateAlerts(entries, 5);
+  assert.equal(a.recent.length, 5);
+  assert.equal(a.recent[0].message, '29'); // последний
+  assert.equal(a.total, 30);
+});
+
+test('aggregateAlerts: мусор/неизвестный level пропускается, не бросает', () => {
+  const a = aggregateAlerts([null, 'x', { level: 'info', code: 'y' }, { level: 'warn', code: 'z', message: 'ok' }]);
+  assert.equal(a.total, 1);
+  assert.equal(a.byLevel.warn, 1);
+  assert.equal(a.recent[0].code, 'z');
+});
+
+test('aggregateAlerts: не-массив → пустой агрегат', () => {
+  const a = aggregateAlerts(null);
+  assert.equal(a.total, 0);
+  assert.deepEqual(a.byLevel, { critical: 0, warn: 0 });
+  assert.deepEqual(a.recent, []);
 });

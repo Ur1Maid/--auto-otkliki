@@ -28,6 +28,7 @@ import {
   aggregateDaily,
   estimateCost,
   computeFunnel,
+  aggregateAlerts,
 } from './lib/metrics.js';
 
 const DEFAULT_PORT = 8787;
@@ -96,6 +97,10 @@ export async function collectMetrics() {
     }
   }
 
+  // alerts.jsonl (append-only) — дневные алерты демона. Только счётчики/строки, без PII.
+  const alertsText = await readOptional(path.join(logsDir, 'alerts.jsonl'));
+  const alerts = aggregateAlerts(parseJsonl(alertsText));
+
   const responses = aggregateResponses(responseEntries);
   const summary = aggregateSummaries(summaries);
   const daily = aggregateDaily(dailies);
@@ -136,6 +141,7 @@ export async function collectMetrics() {
     tokenSource,
     estCostUsd,
     funnel,
+    alerts,
   };
 }
 
@@ -160,6 +166,13 @@ const PAGE = `<!doctype html>
   .panel { background: #171a21; border: 1px solid #242832; border-radius: 10px; padding: 16px; }
   .panel h2 { font-size: 14px; margin: 0 0 12px; color: #c8ccd4; font-weight: 600; }
   .err { color: #ff6b6b; }
+  .muted { color: #8a8f98; font-size: 13px; }
+  .alert { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid #242832; font-size: 13px; }
+  .alert .lvl { font-weight: 700; font-size: 11px; padding: 2px 6px; border-radius: 5px; }
+  .alert.crit .lvl { background: #5a1f1f; color: #ff9b9b; }
+  .alert.warn .lvl { background: #5a4a1f; color: #ffd47a; }
+  .alert .msg { flex: 1; color: #c8ccd4; }
+  .alert .when { color: #8a8f98; white-space: nowrap; }
   button { background: #242832; color: #e6e6e6; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 </style>
 </head>
@@ -174,11 +187,24 @@ const PAGE = `<!doctype html>
     <div class="panel"><h2>Воронка конверсии</h2><canvas id="funnel"></canvas></div>
     <div class="panel"><h2>Скоринг (локально / модель / кэш)</h2><canvas id="scoring"></canvas></div>
     <div class="panel"><h2>Сообщения по дням</h2><canvas id="messages"></canvas></div>
+    <div class="panel" style="grid-column: 1 / -1"><h2>Алерты демона (последние)</h2><div id="alertsList"></div></div>
   </div>
 <script>
 const charts = {};
 function chart(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new Chart(document.getElementById(id), cfg); }
 function card(v, l) { return '<div class="card"><div class="v">' + v + '</div><div class="l">' + l + '</div></div>'; }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function renderAlerts(a) {
+  const el = document.getElementById('alertsList');
+  if (!a || !a.recent || !a.recent.length) { el.innerHTML = '<div class="muted">Алертов нет — всё спокойно.</div>'; return; }
+  el.innerHTML = a.recent.map(x => {
+    const when = x.at ? new Date(x.at).toLocaleString('ru') : '—';
+    return '<div class="alert ' + (x.level === 'critical' ? 'crit' : 'warn') + '">' +
+      '<span class="lvl">' + (x.level === 'critical' ? 'CRIT' : 'WARN') + '</span> ' +
+      '<span class="msg">' + esc(x.message) + '</span> ' +
+      '<span class="when">' + esc(when) + '</span></div>';
+  }).join('');
+}
 async function load() {
   let m;
   try { m = await (await fetch('/api/metrics')).json(); }
@@ -195,7 +221,10 @@ async function load() {
     card(cachePct, 'Кэш-хит скоринга (локальный)') +
     card(tokCachePct, 'Context-cache DeepSeek (токены)') +
     card('$' + m.estCostUsd.toFixed(2), 'Оценка стоимости DeepSeek') +
-    card((m.responses.byStatus.error || 0), 'Ошибок');
+    card((m.responses.byStatus.error || 0), 'Ошибок') +
+    card((m.alerts.byLevel.critical || 0) + ' / ' + (m.alerts.byLevel.warn || 0), 'Алерты (critical / warn)');
+
+  renderAlerts(m.alerts);
 
   const d = m.responses.daily;
   chart('byDay', { type: 'line', data: { labels: d.map(x => x.day), datasets: [

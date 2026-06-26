@@ -236,3 +236,43 @@ export function computeFunnel({ applied = 0, messagesProcessed = 0, replied = 0 
     replyRatePct,
   };
 }
+
+/**
+ * Агрегирует записи алертов (logs/alerts.jsonl: { at, level, code, message }).
+ * Сообщения алертов содержат только счётчики/фиксированные строки — PII там нет
+ * (см. src/lib/alerts.js), поэтому их безопасно отдавать на дашборд.
+ * @param {object[]} entries — распарсенный alerts.jsonl
+ * @param {number} [limit=20] — сколько последних алертов вернуть
+ * @returns {{
+ *   total: number,
+ *   byLevel: { critical: number, warn: number },
+ *   byCode: Record<string, number>,
+ *   recent: Array<{ at: string|null, level: string, code: string, message: string }>,
+ * }}
+ */
+export function aggregateAlerts(entries, limit = 20) {
+  const list = Array.isArray(entries) ? entries : [];
+  const byLevel = { critical: 0, warn: 0 };
+  const byCode = {};
+  const valid = [];
+
+  for (const e of list) {
+    if (!e || typeof e !== 'object') continue;
+    const level = e.level === 'critical' ? 'critical' : e.level === 'warn' ? 'warn' : null;
+    if (!level) continue;
+    const code = typeof e.code === 'string' && e.code ? e.code : 'unknown';
+    byLevel[level] += 1;
+    byCode[code] = (byCode[code] || 0) + 1;
+    valid.push({
+      at: typeof e.at === 'string' ? e.at : null,
+      level,
+      code,
+      message: typeof e.message === 'string' ? e.message : '',
+    });
+  }
+
+  // alerts.jsonl — append-only: хвост = самые свежие. Отдаём последние limit, новые сверху.
+  const n = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 20;
+  const recent = valid.slice(-n).reverse();
+  return { total: valid.length, byLevel, byCode, recent };
+}
