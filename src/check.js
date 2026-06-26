@@ -1,8 +1,16 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { chromium } from 'playwright';
-import { ensureAppDirs, storageStatePath, getAccountResumePath, getAccountSalaryPath } from './config.js';
+import { ensureAppDirs, storageStatePath, getAccountResumePath, getAccountSalaryPath, rootDir } from './config.js';
 import { validateConfig } from './lib/validateConfig.js';
+
+// Грузим .env (как делает review.js), иначе DEEPSEEK_API_KEY ложно покажется «не задан».
+try {
+  process.loadEnvFile(path.join(rootDir, '.env'));
+} catch {
+  // .env может отсутствовать — переменные могут быть заданы в окружении.
+}
 
 await ensureAppDirs();
 
