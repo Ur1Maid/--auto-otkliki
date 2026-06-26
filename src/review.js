@@ -22,7 +22,7 @@ import { extractRequirements } from './lib/vacancyExtract.js';
 import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
-import { prioritizeRemoteFirst } from './lib/vacancyPriority.js';
+import { prioritizeRemoteFirst, looksRemoteInText } from './lib/vacancyPriority.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 import { runUsageCounter } from './lib/usageCounter.js';
@@ -268,9 +268,14 @@ async function collectFromSearch(page, searchUrl, limit) {
 
   // Приоритет: удалёнка вперёд, без отсева — на эти вакансии откликаемся в первую очередь.
   const ordered = prioritizeRemoteFirst(items);
-  const remoteCount = items.filter((item) => item.remote === true).length;
-  console.log(`Приоритизация: всего ${ordered.length}, из них удалёнка ${remoteCount} (отклик в первую очередь).`);
-  return ordered;
+  const remoteSet = new Set(
+    items
+      .filter((item) => item.remote === true)
+      .map((item) => normalizeVacancyUrl(item.url || ''))
+      .filter(Boolean),
+  );
+  console.log(`Приоритизация: всего ${ordered.length}, из них удалёнка ${remoteSet.size} (отклик в первую очередь).`);
+  return { urls: ordered, remoteSet };
 }
 
 async function findResponseButton(page) {
@@ -1455,14 +1460,16 @@ async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
 
-async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '' } = {}) {
+async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '', remoteFromCard = false } = {}) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(700);
 
   const title = await page.locator('h1').first().innerText({ timeout: 3000 }).catch(() => 'Без заголовка');
   const vacancyText = await getVacancyText(page);
-  console.log(`\n[${account}] [${index}/${total}] ${title}`);
+  // Удалёнка: метка из фильтров выдачи (remoteFromCard) ИЛИ упоминание в описании.
+  const remote = remoteFromCard || looksRemoteInText(vacancyText);
+  console.log(`\n[${account}] [${index}/${total}] ${remote ? '🏠 ' : ''}${title}`);
   console.log(url);
 
   if (await pageLooksApplied(page)) {
@@ -1523,7 +1530,7 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   // Стоит ДО findResponseButton, клика RESPONSE_BUTTON_TEXTS и completeApplicationFlow.
   if (!isSubmitAllowed({ dryRun })) {
     console.log('DRY-RUN: вакансия выше порога — откликнулся бы, но --dry-run активен. Отправку пропускаю.');
-    return { status: 'dry_run', title, relevance, scoredBy };
+    return { status: 'dry_run', title, relevance, scoredBy, remote };
   }
 
   if (await pageLooksLikeManualStep(page)) {
@@ -1558,7 +1565,7 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   if (flowResult.status === 'manual_needed') return { status: 'manual_needed', title, scoredBy };
 
   console.log('Отклик отправлен или технический шаг завершен автоматически.');
-  return { status: 'clicked', title, scoredBy };
+  return { status: 'clicked', title, scoredBy, remote };
 }
 
 await ensureAppDirs();
@@ -1621,14 +1628,23 @@ async function buildDeepSeekContextForAccount(account, sharedContext) {
 
 async function collectVacanciesForAccount(page, args, account) {
   let fromSearch = [];
+  let remoteSet = new Set();
 
   if (args.search) {
     console.log(`[${account}] Собираю вакансии из поиска.`);
-    fromSearch = await collectFromSearch(page, args.search, args.limit);
+    // --limit — это число ОТКЛИКОВ, а не размер пула. Часть вакансий отсеется
+    // (уже откликнулись / балл < порога / ручной шаг), поэтому собираем с запасом.
+    const collectCap = Math.max(args.limit * 5, 100);
+    const collected = await collectFromSearch(page, args.search, collectCap);
+    fromSearch = collected.urls;
+    remoteSet = collected.remoteSet;
   }
 
   const fromFile = await readVacancyFile(args.file);
-  return [...new Set([...fromSearch, ...fromFile])].slice(0, args.limit);
+  // Дедуп с сохранением порядка (удалёнка из поиска впереди). НЕ режем по limit —
+  // лимит ограничивает число откликов в цикле обработки, а не размер пула.
+  const urls = [...new Set([...fromSearch, ...fromFile])];
+  return { urls, remoteSet };
 }
 
 async function processAccount(account, args, sharedDeepSeekContext) {
@@ -1640,15 +1656,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
   const summary = createRunSummary();
 
   try {
-    const vacancies = await collectVacanciesForAccount(page, args, account);
+    const { urls: vacancies, remoteSet } = await collectVacanciesForAccount(page, args, account);
 
     if (vacancies.length === 0) {
       console.log(`[${account}] Не нашел вакансии. Добавьте ссылки в input/vacancies.txt или передайте --search/--text.`);
       return;
     }
 
-    console.log(`[${account}] Найдено вакансий: ${vacancies.length}.`);
+    console.log(`[${account}] Пул вакансий: ${vacancies.length}. Цель: ${args.limit} откликов (удалёнка в приоритете).`);
 
+    let remoteApplied = 0;
     for (let index = 0; index < vacancies.length; index += 1) {
       const url = vacancies[index];
 
@@ -1660,11 +1677,27 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           deepSeekContext,
           resumeUpgradeCollector,
           scoreCache,
-          resumeHash
+          resumeHash,
+          // Канонизируем url: пул из поиска уже канонический, но файловые URL
+          // нормализуются иначе (normalizeHhUrl, с query) — приводим к канону.
+          remoteFromCard: remoteSet.has(normalizeVacancyUrl(url) || url)
         });
         summary.record(result);
         await appendLog({ url, ...result }, account);
         if (result.status === 'quit') break;
+        // Считаем удалённые «отклики» (в dry-run — «откликнулся бы») для итогового лога.
+        if ((result.status === 'clicked' || result.status === 'dry_run') && result.remote) remoteApplied += 1;
+
+        // --limit считает успешные отклики, не размер пула. В dry-run считаем
+        // «откликнулся бы» (dry_run) как отклик, чтобы проба тоже останавливалась на лимите.
+        // ВАЖНО (инвариант безопасности): этот break — единственный ограничитель числа
+        // РЕАЛЬНЫХ откликов (пул теперь шире limit). Не убирать/не обходить при рефакторинге.
+        const snap = summary.snapshot();
+        const appliedSoFar = snap.applied + snap.dryRun;
+        if (appliedSoFar >= args.limit) {
+          console.log(`[${account}] Достигнут лимит откликов: ${args.limit} (из них удалёнка ${remoteApplied}).`);
+          break;
+        }
       } catch (error) {
         console.error(`[${account}] Ошибка на ${url}: ${error.message}`);
         summary.record({ status: 'error' });

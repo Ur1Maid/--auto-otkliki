@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { prioritizeRemoteFirst } from '../src/lib/vacancyPriority.js';
+import { prioritizeRemoteFirst, looksRemoteInText } from '../src/lib/vacancyPriority.js';
 
 const V = (id) => `https://hh.ru/vacancy/${id}`;
 
@@ -66,4 +66,24 @@ test('prioritizeRemoteFirst: не-массив на входе → пустой 
   assert.deepEqual(prioritizeRemoteFirst(null), []);
   assert.deepEqual(prioritizeRemoteFirst(undefined), []);
   assert.deepEqual(prioritizeRemoteFirst('foo'), []);
+});
+
+// --- looksRemoteInText ---
+
+test('looksRemoteInText: ловит явные формулировки удалёнки', () => {
+  assert.equal(looksRemoteInText('Удалённая работа, гибкий график'), true);
+  assert.equal(looksRemoteInText('Работаем на удалёнке'), true);
+  assert.equal(looksRemoteInText('Можно удалённо из любого города'), true);
+  assert.equal(looksRemoteInText('Формат работы: полностью удалённый'), true);
+  assert.equal(looksRemoteInText('Дистанционная работа'), true);
+  assert.equal(looksRemoteInText('Fully remote position'), true);
+  assert.equal(looksRemoteInText('Work from home available'), true);
+});
+
+test('looksRemoteInText: не ловит ложные срабатывания', () => {
+  assert.equal(looksRemoteInText('Удалённость офиса от метро 5 минут'), false);
+  assert.equal(looksRemoteInText('Офис в центре, полный день'), false);
+  assert.equal(looksRemoteInText(''), false);
+  assert.equal(looksRemoteInText(null), false);
+  assert.equal(looksRemoteInText(undefined), false);
 });
