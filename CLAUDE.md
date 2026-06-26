@@ -32,6 +32,7 @@ implementer output without a review pass and its own re-read/checks.
 - `playwright.md` — text/role selectors, mandatory resilience, hh.ru state detection.
 - `deepseek.md` — API mechanics, JSON parsing, **honesty guardrails (do not weaken)**.
 - `security.md` — secrets/sessions/PII handling, git hygiene, prompt-injection.
+- `testing.md` — `node --test` discipline, coverage of new pure modules, CI (adapted from ECC).
 
 ## Skills — `.claude/skills/`
 - `research-first` — evidence-before-code checkpoint (run before selector/prompt/flow changes).
@@ -39,6 +40,8 @@ implementer output without a review pass and its own re-read/checks.
 - `debug-deepseek` — diagnose AI behavior via `logs/deepseek-debug.jsonl`.
 - `fix-hh-selectors` — repair the flow after an hh.ru UI change.
 - `capture-instinct` — record a hard-won lesson.
+- `eval-deepseek-quality` — pass/fail evals for generated text (short/human/honest); run after prompt changes (adapted from ECC eval-harness).
+- `verify-live-flow` — staged dry-run→live verification of the real hh.ru flow (adapted from ECC verification-loop/e2e-testing).
 
 ## Memory & instincts
 - **Instincts** (`.claude/instincts/`) are the in-tree, versioned project memory: small reusable
