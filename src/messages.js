@@ -1,11 +1,12 @@
 /**
  * src/messages.js — модуль авто-ответов на сообщения hh.ru (chatik).
  *
- * Архитектура доступа к чату:
- *   - Чат живёт в cross-origin iframe (CHATIK_IFRAME_SELECTOR) на страницах hh.ru,
- *     либо как отдельная страница chatik.hh.ru.
- *   - В Playwright: сначала пробуем frameLocator(CHATIK_IFRAME_SELECTOR),
- *     если не найден — page.frame({ url: CHATIK_URL_PATTERN }), либо прямой переход /chat/<id>.
+ * Архитектура доступа к чату (актуально на 2026-06, проверено на живом DOM):
+ *   - Основной путь: chatik рендерится ИНЛАЙН на hh.ru/chat (data-qa="chatik-layout"
+ *     в DOM самой страницы, без cross-origin iframe). processUnread переходит на CHAT_URL,
+ *     getChatFrame возвращает сам page.
+ *   - Legacy-fallback: старая iframe-интеграция (CHATIK_IFRAME_SELECTOR / chatik.hh.ru
+ *     во фрейме) — оставлена в getChatFrame на случай возврата старого UI.
  *
  * Безопасность:
  *   - Входящие письма работодателей — untrusted-ввод (вектор prompt-injection).
@@ -24,18 +25,32 @@ import { generateReply } from './lib/replyGenerate.js';
 import { sendReply, createProcessedTracker } from './lib/replySend.js';
 import { runIsolated } from './lib/isolate.js';
 
+/** Страница чата кандидата. Современный hh.ru рендерит chatik ИНЛАЙН здесь (не в iframe). */
+export const CHAT_URL = 'https://hh.ru/chat';
+
 /**
- * Возвращает Playwright-frame чата.
- * Сначала пробует iframe-интеграцию на hh.ru; если не найден — ищет frame по URL chatik.hh.ru.
+ * Возвращает Playwright frame/page, в котором живёт chatik.
+ *
+ * На текущем hh.ru chatik рендерится ИНЛАЙН прямо на /chat (data-qa="chatik-layout"
+ * в DOM самой страницы, без cross-origin iframe) — это основной путь. Старая
+ * iframe-интеграция (chatik.hh.ru во фрейме) оставлена как legacy-fallback.
  * Возвращает null при любой ошибке (resilient — не бросает).
  *
- * TODO (M4.2): добавить fallback на прямой переход page.goto('/chats') и ожидание iframe.
+ * Предполагается, что вызывающий уже перешёл на CHAT_URL (это делает processUnread).
  *
  * @param {import('playwright').Page} page
- * @returns {Promise<import('playwright').Frame | null>}
+ * @returns {Promise<import('playwright').Frame | import('playwright').Page | null>}
  */
 export async function getChatFrame(page) {
-  // Пробуем iframe-интеграцию (основной путь на страницах hh.ru)
+  // Основной путь: chatik инлайн на странице (data-qa="chatik-layout" прямо в DOM).
+  const inlineVisible = await page
+    .locator(CHAT_SELECTORS.threadList.layout)
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (inlineVisible) return page;
+
+  // Legacy: iframe-интеграция chatik на страницах hh.ru.
   const frameLocator = page.frameLocator(CHATIK_IFRAME_SELECTOR);
   const hasIframe = await frameLocator
     .locator('body')
@@ -126,6 +141,11 @@ export async function processUnread(page, opts = {}) {
 
   // Используем переданный трекер или создаём локальный для этой сессии.
   const tracker = opts.tracker ?? createProcessedTracker();
+
+  // 0. Переходим на страницу чата (chatik рендерится инлайн на hh.ru/chat).
+  //    best-effort: ошибка навигации не бросается — getChatFrame вернёт null ниже.
+  await page.goto(CHAT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(2000).catch(() => {});
 
   // 1. Получаем frame чата.
   const frame = await getChatFrame(page);
