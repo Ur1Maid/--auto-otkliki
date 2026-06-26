@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyBumpButton, bumpResume } from '../src/lib/resumeBump.js';
+import { RESUME_SELECTORS } from '../src/lib/selectors.js';
 
 // ─── Вспомогательная фабрика мок-фрейма ─────────────────────────────────────
 // Возвращает объект с совместимым с Playwright Page/Frame API.
@@ -194,11 +195,12 @@ test('bumpResume: кастомный selector → frame.locator вызван с 
   assert.equal(frame._lastSel(), customSel);
 });
 
-// Дефолтный selector — RESUME_SELECTORS.updateButton.
-test('bumpResume: дефолтный selector → [data-qa="resume-update-button"]', async () => {
+// Дефолтный selector — RESUME_SELECTORS.updateButton (мульти-значный data-qa → `~=`).
+test('bumpResume: дефолтный selector → RESUME_SELECTORS.updateButton', async () => {
   const frame = makeFrame({ visible: false });
   await bumpResume(frame);
-  assert.equal(frame._lastSel(), '[data-qa="resume-update-button"]');
+  assert.equal(frame._lastSel(), RESUME_SELECTORS.updateButton);
+  assert.equal(frame._lastSel(), '[data-qa~="resume-update-button"]');
 });
 
 // isVisible бросает → трактуется как false → not_found.
