@@ -100,8 +100,9 @@ export async function collectMetrics() {
   const summary = aggregateSummaries(summaries);
   const daily = aggregateDaily(dailies);
 
-  // Токены/стоимость: суммируем по дневным отчётам (там есть cacheHitTokens).
-  const tokenTotals = dailies.reduce(
+  // Токены/стоимость: предпочитаем дневные отчёты (там разбивка по дням), но если в них
+  // токенов нет (демон ещё не дошил их в daily) — берём реальные из summary.tokensRunCumulative.
+  const dailyTokens = dailies.reduce(
     (acc, d) => {
       acc.promptTokens += Number(d?.tokens?.promptTokens) || 0;
       acc.completionTokens += Number(d?.tokens?.completionTokens) || 0;
@@ -110,6 +111,15 @@ export async function collectMetrics() {
     },
     { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0 },
   );
+  const hasDailyTokens = dailyTokens.promptTokens > 0 || dailyTokens.completionTokens > 0;
+  const tokenTotals = hasDailyTokens
+    ? dailyTokens
+    : {
+        promptTokens: summary.totals.promptTokens,
+        completionTokens: summary.totals.completionTokens,
+        cacheHitTokens: summary.totals.cacheHitTokens,
+      };
+  const tokenSource = hasDailyTokens ? 'daily' : 'summary';
   const estCostUsd = estimateCost(tokenTotals);
 
   // Воронка: отклики (из responses) + сообщения (сумма по daily).
@@ -123,6 +133,7 @@ export async function collectMetrics() {
     summary,
     daily,
     tokenTotals,
+    tokenSource,
     estCostUsd,
     funnel,
   };
@@ -176,11 +187,13 @@ async function load() {
 
   const conv = m.funnel.conversionPct.toFixed(1) + '%';
   const cachePct = (m.summary.cacheHitRatio * 100).toFixed(0) + '%';
+  const tokCachePct = (m.summary.tokenCacheHitRatio * 100).toFixed(0) + '%';
   document.getElementById('cards').innerHTML =
     card(m.responses.applied, 'Откликов отправлено') +
     card(conv, 'Конверсия (вовлечённые/отклики)') +
     card(m.funnel.stages[2].value, 'Ответов в чате') +
-    card(cachePct, 'Кэш-хит скоринга') +
+    card(cachePct, 'Кэш-хит скоринга (локальный)') +
+    card(tokCachePct, 'Context-cache DeepSeek (токены)') +
     card('$' + m.estCostUsd.toFixed(2), 'Оценка стоимости DeepSeek') +
     card((m.responses.byStatus.error || 0), 'Ошибок');
 

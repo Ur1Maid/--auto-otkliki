@@ -87,22 +87,55 @@ export function aggregateResponses(entries) {
 }
 
 /**
+ * Нормализует поле tokensRunCumulative. review.js пишет туда объект
+ * { calls, promptTokens, completionTokens, totalTokens, cacheHitTokens }; старые
+ * прогоны могли писать число (тогда трактуем его как totalTokens). Never throws.
+ * @param {object|number|undefined} t
+ * @returns {{ calls: number, promptTokens: number, completionTokens: number, totalTokens: number, cacheHitTokens: number }}
+ */
+function normTokens(t) {
+  const num = (v) => (Number.isFinite(v) ? v : 0);
+  if (typeof t === 'number') {
+    return { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: num(t), cacheHitTokens: 0 };
+  }
+  if (!t || typeof t !== 'object') {
+    return { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cacheHitTokens: 0 };
+  }
+  const prompt = num(t.promptTokens);
+  const completion = num(t.completionTokens);
+  return {
+    calls: num(t.calls),
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: num(t.totalTokens) || prompt + completion,
+    cacheHitTokens: num(t.cacheHitTokens),
+  };
+}
+
+/**
  * Агрегирует per-account summary-*.json: скоринг (локально/модель/кэш) и токены.
+ * tokensRunCumulative — объект (см. normTokens); раскладываем по компонентам и считаем
+ * РЕАЛЬНЫЙ context-cache hit ratio DeepSeek (cacheHitTokens / promptTokens).
  * @param {object[]} summaries
  * @returns {{
  *   accounts: Array<object>,
- *   totals: { applied: number, viewed: number, errors: number, locallyScored: number, modelScored: number, cachedScored: number, tokens: number },
+ *   totals: { applied: number, viewed: number, errors: number, locallyScored: number, modelScored: number, cachedScored: number, tokens: number, promptTokens: number, completionTokens: number, cacheHitTokens: number },
  *   cacheHitRatio: number,
+ *   tokenCacheHitRatio: number,
  * }}
  */
 export function aggregateSummaries(summaries) {
   const list = Array.isArray(summaries) ? summaries : [];
-  const totals = { applied: 0, viewed: 0, errors: 0, locallyScored: 0, modelScored: 0, cachedScored: 0, tokens: 0 };
+  const totals = {
+    applied: 0, viewed: 0, errors: 0, locallyScored: 0, modelScored: 0, cachedScored: 0,
+    tokens: 0, promptTokens: 0, completionTokens: 0, cacheHitTokens: 0,
+  };
   const num = (v) => (Number.isFinite(v) ? v : 0);
 
   const accounts = list
     .filter((s) => s && typeof s === 'object')
     .map((s) => {
+      const tok = normTokens(s.tokensRunCumulative);
       const a = {
         account: typeof s.account === 'string' ? s.account : 'default',
         applied: num(s.applied),
@@ -111,7 +144,10 @@ export function aggregateSummaries(summaries) {
         locallyScored: num(s.locallyScored),
         modelScored: num(s.modelScored),
         cachedScored: num(s.cachedScored),
-        tokens: num(s.tokensRunCumulative),
+        tokens: tok.totalTokens,
+        promptTokens: tok.promptTokens,
+        completionTokens: tok.completionTokens,
+        cacheHitTokens: tok.cacheHitTokens,
       };
       totals.applied += a.applied;
       totals.viewed += a.viewed;
@@ -120,12 +156,16 @@ export function aggregateSummaries(summaries) {
       totals.modelScored += a.modelScored;
       totals.cachedScored += a.cachedScored;
       totals.tokens += a.tokens;
+      totals.promptTokens += a.promptTokens;
+      totals.completionTokens += a.completionTokens;
+      totals.cacheHitTokens += a.cacheHitTokens;
       return a;
     });
 
   const scoredTotal = totals.locallyScored + totals.modelScored + totals.cachedScored;
   const cacheHitRatio = scoredTotal > 0 ? totals.cachedScored / scoredTotal : 0;
-  return { accounts, totals, cacheHitRatio };
+  const tokenCacheHitRatio = totals.promptTokens > 0 ? totals.cacheHitTokens / totals.promptTokens : 0;
+  return { accounts, totals, cacheHitRatio, tokenCacheHitRatio };
 }
 
 /**

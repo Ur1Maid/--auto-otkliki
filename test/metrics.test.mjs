@@ -61,10 +61,37 @@ test('aggregateSummaries: суммирует токены и скоринг, с�
   assert.equal(s.accounts.length, 2);
 });
 
+test('aggregateSummaries: объектный tokensRunCumulative → разбивка + context-cache ratio', () => {
+  const s = aggregateSummaries([
+    {
+      account: 'a', applied: 5,
+      tokensRunCumulative: { calls: 3, promptTokens: 1000, completionTokens: 400, totalTokens: 1400, cacheHitTokens: 600 },
+    },
+    {
+      account: 'b', applied: 2,
+      tokensRunCumulative: { calls: 1, promptTokens: 0, completionTokens: 0, totalTokens: 0, cacheHitTokens: 0 },
+    },
+  ]);
+  assert.equal(s.totals.promptTokens, 1000);
+  assert.equal(s.totals.completionTokens, 400);
+  assert.equal(s.totals.cacheHitTokens, 600);
+  assert.equal(s.totals.tokens, 1400); // totalTokens
+  assert.equal(s.tokenCacheHitRatio, 600 / 1000); // реальный context-cache hit
+});
+
+test('aggregateSummaries: totalTokens отсутствует → берём prompt+completion', () => {
+  const s = aggregateSummaries([
+    { account: 'a', tokensRunCumulative: { promptTokens: 200, completionTokens: 100, cacheHitTokens: 50 } },
+  ]);
+  assert.equal(s.totals.tokens, 300);
+});
+
 test('aggregateSummaries: пусто → нулевые тоталы, ratio 0 (не делит на ноль)', () => {
   const s = aggregateSummaries([]);
   assert.equal(s.totals.tokens, 0);
+  assert.equal(s.totals.promptTokens, 0);
   assert.equal(s.cacheHitRatio, 0);
+  assert.equal(s.tokenCacheHitRatio, 0);
 });
 
 // --- aggregateDaily ---
