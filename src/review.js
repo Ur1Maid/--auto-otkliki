@@ -22,6 +22,7 @@ import { extractRequirements } from './lib/vacancyExtract.js';
 import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
+import { prioritizeRemoteFirst } from './lib/vacancyPriority.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 import { runUsageCounter } from './lib/usageCounter.js';
@@ -212,39 +213,64 @@ async function loadKnowledgeBase(directory) {
 }
 
 async function collectFromSearch(page, searchUrl, limit) {
-  const urls = new Set();
+  const seen = new Set();   // канонические URL, уже собранные (дедуп во время сбора)
+  const items = [];         // сырые карточки { url, remote } в DOM-порядке
   const baseUrl = new URL(searchUrl);
   baseUrl.searchParams.set('per_page', '100');
   let pageIndex = Number(baseUrl.searchParams.get('page') || 0);
   let pagesWithoutNewVacancies = 0;
 
-  while (urls.size < limit && pagesWithoutNewVacancies < 2) {
+  while (seen.size < limit && pagesWithoutNewVacancies < 2) {
     const nextUrl = new URL(baseUrl);
     nextUrl.searchParams.set('page', String(pageIndex));
-    const beforePage = urls.size;
+    const beforePage = seen.size;
 
     await page.goto(nextUrl.toString(), { waitUntil: 'domcontentloaded' });
     await dismissHarmlessPopups(page);
     await page.waitForTimeout(900);
 
-    const pageUrls = await page.$$eval('a[href*="/vacancy/"]', (links) =>
-      links.map((link) => link.href).filter((href) => /\/vacancy\/\d+/.test(new URL(href).pathname))
-    );
+    // Карточки выдачи: URL + флаг удалёнки (метка hh.ru).
+    const cards = await page.$$eval('[data-qa="vacancy-serp__vacancy"]', (nodes) =>
+      nodes.map((card) => {
+        const remote = !!card.querySelector('[data-qa="vacancy-label-work-schedule-remote"]');
+        const title = card.querySelector('a[data-qa="serp-item__title"]');
+        let url = title ? title.href : '';
+        if (!/\/vacancy\/\d+/.test(url)) {
+          const alt = card.querySelector('a[href*="/vacancy/"]');
+          if (alt) url = alt.href;
+        }
+        return { url, remote };
+      })
+    ).catch(() => []);
 
-    for (const url of pageUrls) {
-      if (urls.size >= limit) break;
-      const vacancyUrl = normalizeVacancyUrl(url);
-      if (vacancyUrl) urls.add(vacancyUrl);
+    // Подстраховка: любые /vacancy/-ссылки вне карточек (не теряем вакансии),
+    // признак удалёнки неизвестен → remote:false (уйдут в хвост приоритета).
+    const flat = await page.$$eval('a[href*="/vacancy/"]', (links) =>
+      links.map((link) => link.href).filter((href) => /\/vacancy\/\d+/.test(new URL(href).pathname))
+    ).catch(() => []);
+
+    const pageItems = [...cards, ...flat.map((url) => ({ url, remote: false }))];
+
+    for (const item of pageItems) {
+      if (seen.size >= limit) break;
+      const vacancyUrl = normalizeVacancyUrl(item.url || '');
+      if (!vacancyUrl || seen.has(vacancyUrl)) continue;
+      seen.add(vacancyUrl);
+      items.push(item);
     }
 
-    const added = urls.size - beforePage;
-    console.log(`Собрал вакансий из поиска: ${urls.size}/${limit} (страница ${pageIndex + 1}, новых ${added}).`);
+    const added = seen.size - beforePage;
+    console.log(`Собрал вакансий из поиска: ${seen.size}/${limit} (страница ${pageIndex + 1}, новых ${added}).`);
 
     pagesWithoutNewVacancies = added === 0 ? pagesWithoutNewVacancies + 1 : 0;
     pageIndex += 1;
   }
 
-  return [...urls];
+  // Приоритет: удалёнка вперёд, без отсева — на эти вакансии откликаемся в первую очередь.
+  const ordered = prioritizeRemoteFirst(items);
+  const remoteCount = items.filter((item) => item.remote === true).length;
+  console.log(`Приоритизация: всего ${ordered.length}, из них удалёнка ${remoteCount} (отклик в первую очередь).`);
+  return ordered;
 }
 
 async function findResponseButton(page) {
