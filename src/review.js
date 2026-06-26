@@ -23,6 +23,7 @@ import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContex
 import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { prioritizeRemoteFirst, looksRemoteInText } from './lib/vacancyPriority.js';
+import { randomDelayMs } from './lib/pacing.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
 import { runUsageCounter } from './lib/usageCounter.js';
@@ -42,6 +43,10 @@ const DEFAULT_DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
 const DEFAULT_RELEVANCE_MIN_SCORE = 65;
 const DEFAULT_RESUME_SKILLS_LIMIT = 30;
+// Анти-бот-пейсинг: рандомная пауза между откликами (сек). Применяется только
+// в боевом режиме (не в --dry-run). Настраивается через --min-delay / --max-delay.
+const DEFAULT_MIN_DELAY_SEC = 20;
+const DEFAULT_MAX_DELAY_SEC = 90;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
@@ -55,6 +60,8 @@ function parseArgs(argv) {
     limit: DEFAULT_LIMIT,
     minScore: DEFAULT_RELEVANCE_MIN_SCORE,
     resumeSkillsLimit: DEFAULT_RESUME_SKILLS_LIMIT,
+    minDelaySec: DEFAULT_MIN_DELAY_SEC,
+    maxDelaySec: DEFAULT_MAX_DELAY_SEC,
     accounts: ['default'],
     autoApply: true,
     dryRun: false,
@@ -71,6 +78,8 @@ function parseArgs(argv) {
     else if (arg === '--area') args.area = argv[++index] || DEFAULT_AREA;
     else if (arg === '--limit') args.limit = Number(argv[++index] || args.limit);
     else if (arg === '--min-score') args.minScore = Number(argv[++index] || args.minScore);
+    else if (arg === '--min-delay') args.minDelaySec = Number(argv[++index] ?? args.minDelaySec);
+    else if (arg === '--max-delay') args.maxDelaySec = Number(argv[++index] ?? args.maxDelaySec);
     else if (arg === '--resume-skills-limit') args.resumeSkillsLimit = Number(argv[++index] || args.resumeSkillsLimit);
     else if (arg === '--account') args.accounts = [normalizeAccountName(argv[++index] || 'default')];
     else if (arg === '--accounts') {
@@ -97,6 +106,17 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(args.resumeSkillsLimit) || args.resumeSkillsLimit < 1 || args.resumeSkillsLimit > 30) {
     throw new Error('Параметр --resume-skills-limit должен быть числом от 1 до 30.');
+  }
+
+  if (!Number.isFinite(args.minDelaySec) || args.minDelaySec < 0) {
+    throw new Error('Параметр --min-delay должен быть неотрицательным числом (секунды).');
+  }
+  if (!Number.isFinite(args.maxDelaySec) || args.maxDelaySec < 0) {
+    throw new Error('Параметр --max-delay должен быть неотрицательным числом (секунды).');
+  }
+  if (args.maxDelaySec < args.minDelaySec) {
+    // Терпим перепутанные границы — меняем местами, не падаем.
+    [args.minDelaySec, args.maxDelaySec] = [args.maxDelaySec, args.minDelaySec];
   }
 
   if (args.accounts.length === 0) {
@@ -1664,6 +1684,9 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     }
 
     console.log(`[${account}] Пул вакансий: ${vacancies.length}. Цель: ${args.limit} откликов (удалёнка в приоритете).`);
+    if (!args.dryRun) {
+      console.log(`[${account}] Антибот: пауза ${args.minDelaySec}–${args.maxDelaySec}с между откликами.`);
+    }
 
     let remoteApplied = 0;
     for (let index = 0; index < vacancies.length; index += 1) {
@@ -1702,6 +1725,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         console.error(`[${account}] Ошибка на ${url}: ${error.message}`);
         summary.record({ status: 'error' });
         await appendLog({ url, status: 'error', error: error.message }, account);
+      }
+
+      // Анти-бот-пейсинг: человеческая рандомная пауза между откликами.
+      // Только в боевом режиме (в --dry-run не тормозим проверки) и не после последней.
+      if (!args.dryRun && index < vacancies.length - 1) {
+        const waitMs = randomDelayMs(args.minDelaySec * 1000, args.maxDelaySec * 1000);
+        if (waitMs > 0) {
+          console.log(`[${account}] Пауза ${Math.round(waitMs / 1000)}с (антибот)…`);
+          await page.waitForTimeout(waitMs).catch(() => {});
+        }
       }
     }
 

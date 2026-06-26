@@ -24,6 +24,7 @@ import { lastEmployerMessage } from './lib/chatParse.js';
 import { generateReply } from './lib/replyGenerate.js';
 import { sendReply, createProcessedTracker } from './lib/replySend.js';
 import { runIsolated } from './lib/isolate.js';
+import { randomDelayMs } from './lib/pacing.js';
 
 /** Страница чата кандидата. Современный hh.ru рендерит chatik ИНЛАЙН здесь (не в iframe). */
 export const CHAT_URL = 'https://hh.ru/chat';
@@ -137,6 +138,9 @@ export async function processUnread(page, opts = {}) {
     replyAuto = false,    // ДЕФОЛТ SAFE: без явного флага требуется подтверждение
     deepSeekContext = {},
     confirmFn,
+    // Анти-бот-пейсинг: рандомная пауза после реально отправленного ответа (сек→мс).
+    minDelayMs = 20000,
+    maxDelayMs = 90000,
   } = opts;
 
   // Используем переданный трекер или создаём локальный для этой сессии.
@@ -258,6 +262,9 @@ export async function processUnread(page, opts = {}) {
         // HANDSHAKE: tracker.add ТОЛЬКО после успешной отправки (dry-run/not-confirmed
         // НЕ трекаются — поздний реальный прогон сможет отправить).
         tracker.add(chatId);
+        // Анти-бот: человеческая пауза после реального ответа (sent=true ⇒ не dry-run).
+        const waitMs = randomDelayMs(minDelayMs, maxDelayMs);
+        if (waitMs > 0) await page.waitForTimeout(waitMs).catch(() => {});
       } else {
         console.log(`[messages] Тред ${chatId}: не отправлено (${sendResult.reason})`);
       }
