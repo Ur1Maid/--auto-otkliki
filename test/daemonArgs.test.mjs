@@ -50,6 +50,14 @@ test('parseDaemonArgs: --task с мусором → бросает', () => {
   assert.throws(() => parseDaemonArgs(['--task', 'wat']), /должен быть одним из/);
 });
 
+test('parseDaemonArgs: replyRead дефолт false', () => {
+  assert.equal(parseDaemonArgs([]).replyRead, false);
+});
+
+test('parseDaemonArgs: --reply-read → replyRead true', () => {
+  assert.equal(parseDaemonArgs(['--reply-read']).replyRead, true);
+});
+
 test('parseDaemonArgs: null → дефолты (не бросает)', () => {
   const opts = parseDaemonArgs(null);
   assert.equal(opts.dryRun, true);

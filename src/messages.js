@@ -138,6 +138,10 @@ export async function processUnread(page, opts = {}) {
     replyAuto = false,    // ДЕФОЛТ SAFE: без явного флага требуется подтверждение
     deepSeekContext = {},
     confirmFn,
+    // includeRead: обрабатывать ВСЕ треды, а не только непрочитанные. Нужно, чтобы
+    // отвечать на треды, где работодатель написал последним, но тред уже «прочитан».
+    // Идемпотентность держит decideReply (applicant-last → skip) + tracker.
+    includeRead = false,
     // Анти-бот-пейсинг: рандомная пауза после реально отправленного ответа (сек→мс).
     minDelayMs = 2000,
     maxDelayMs = 7000,
@@ -158,10 +162,17 @@ export async function processUnread(page, opts = {}) {
     return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0 };
   }
 
-  // 2. Список тредов — фильтруем только непрочитанные.
+  // 2. Список тредов. По умолчанию — только непрочитанные (дёшево). С includeRead —
+  //    все треды (чтобы поймать employer-last в уже «прочитанных»); decideReply отсеет
+  //    те, где последнее сообщение наше или системное.
   const threads = await listThreads(frame);
-  const unread = threads.filter((t) => t.unread === true);
-  console.log(`[messages] ${account ? `[${account}] ` : ''}Найдено непрочитанных тредов: ${unread.length}`);
+  const targets = includeRead ? threads : threads.filter((t) => t.unread === true);
+  console.log(
+    `[messages] ${account ? `[${account}] ` : ''}` +
+    (includeRead
+      ? `Тредов к осмотру (включая прочитанные): ${targets.length} из ${threads.length}`
+      : `Найдено непрочитанных тредов: ${targets.length}`)
+  );
 
   let processed = 0;
   let replied = 0;
@@ -169,8 +180,8 @@ export async function processUnread(page, opts = {}) {
   let manual = 0;
   let errors = 0;
 
-  // 3. Обходим непрочитанные треды через runIsolated — один сбой не роняет остальные.
-  const threadResults = await runIsolated(unread, async (thread) => {
+  // 3. Обходим выбранные треды через runIsolated — один сбой не роняет остальные.
+  const threadResults = await runIsolated(targets, async (thread) => {
     const { chatId } = thread;
 
     // a. Идемпотентность: уже обработан в этой сессии.
@@ -227,6 +238,7 @@ export async function processUnread(page, opts = {}) {
         vacancyTitle,
         resumeProfile: deepSeekContext.resumeProfile,
         salary: deepSeekContext.salary,
+        preferences: deepSeekContext.preferences,
         apiKey: deepSeekContext.apiKey,
         apiUrl: deepSeekContext.apiUrl,
         model: deepSeekContext.model,

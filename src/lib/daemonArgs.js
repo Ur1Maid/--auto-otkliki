@@ -31,6 +31,7 @@
  *   limit: number,
  *   dryRun: boolean,
  *   replyAuto: boolean,
+ *   replyRead: boolean,
  *   once: boolean,
  *   task: '' | 'apply' | 'messages' | 'resume',
  *   messagesPollMinutes: number,
@@ -50,6 +51,7 @@ export function parseDaemonArgs(argv) {
     replyAuto: false,       // ДЕФОЛТ SAFE
     once: false,
     task: '',               // '' = цикл-планировщик; иначе один шаг и выход (для внешнего шедулера)
+    replyRead: false,       // ДЕФОЛТ SAFE: отвечать только на непрочитанные; --reply-read → и на прочитанные employer-last
     messagesPollMinutes: 15,
     microEditMinutes: 30,
   };
@@ -93,6 +95,10 @@ export function parseDaemonArgs(argv) {
 
     } else if (arg === '--reply-auto') {
       args.replyAuto = true;
+
+    } else if (arg === '--reply-read') {
+      // Отвечать и на прочитанные треды, где работодатель написал последним.
+      args.replyRead = true;
 
     } else if (arg === '--once') {
       args.once = true;

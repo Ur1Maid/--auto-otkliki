@@ -49,6 +49,10 @@ export function getAccountSalaryPath(account = 'default') {
   return path.join(getAccountConfigDir(account), 'salary.md');
 }
 
+export function getAccountPreferencesPath(account = 'default') {
+  return path.join(getAccountConfigDir(account), 'preferences.txt');
+}
+
 export function getAccountSummaryPath(account = 'default') {
   const normalized = normalizeAccountName(account);
   return normalized === 'default'

@@ -17,7 +17,7 @@ test('stripTemplate: не-строка → пустая строка', () => {
   assert.equal(stripTemplate(undefined, ['x']), '');
 });
 
-test('loadAccountProfile: несуществующий аккаунт → пустые профиль и зарплата (не бросает)', async () => {
+test('loadAccountProfile: несуществующий аккаунт → пустые профиль/зарплата/предпочтения (не бросает)', async () => {
   const res = await loadAccountProfile('___nonexistent_test_account___');
-  assert.deepEqual(res, { resumeProfile: '', salary: '' });
+  assert.deepEqual(res, { resumeProfile: '', salary: '', preferences: '' });
 });

@@ -8,6 +8,7 @@ import {
   getAccountLogPath,
   getAccountResumePath,
   getAccountSalaryPath,
+  getAccountPreferencesPath,
   getAccountStorageStatePath,
   getAccountSummaryPath,
   inputDir,
@@ -656,6 +657,7 @@ async function askDeepSeek({
   vacancyText,
   resume,
   salary,
+  preferences,
   salaryPath,
   knowledgeBase,
   apiKey,
@@ -680,6 +682,9 @@ async function askDeepSeek({
   const salaryText = kind === 'salary'
     ? (salary || 'Зарплатные ожидания не заполнены.')
     : 'Не использовать зарплатные ожидания: этот вопрос не про зарплату.';
+  const prefsText = (typeof preferences === 'string' && preferences.trim())
+    ? preferences
+    : 'не заданы';
 
   const system = [
     'Ты помогаешь кандидату заполнять отклики на вакансии.',
@@ -689,6 +694,7 @@ async function askDeepSeek({
     'Если имя кандидата не указано в резюме, не пиши имя и не используй фразу "Меня зовут".',
     'Отвечай только на основе данных, которые переданы в запросе.',
     'Используй зарплатные ожидания только если тип поля "зарплата". В остальных ответах не упоминай зарплату.',
+    'На вопросы о готовности к переезду, типе занятости, командировках, графике и формате работы отвечай ТОЛЬКО из блока «Предпочтения кандидата». Если нужного там нет — верни ровно NO_ANSWER, не угадывай.',
     'Не выдумывай места работы, опыт, проекты, зарплатные ожидания и личные факты.',
     'Для сопроводительного письма позиционируй кандидата максимально релевантно вакансии: цель — получить приглашение на собеседование.',
     'Сопроводительное письмо всегда пишется от лица кандидата, а не работодателя или рекрутера.',
@@ -721,6 +727,9 @@ async function askDeepSeek({
     '',
     'Зарплатные ожидания и правила ответа о деньгах:',
     salaryText,
+    '',
+    'Предпочтения кандидата (переезд/занятость/командировки/график/формат — отвечать о них только отсюда):',
+    prefsText,
     '',
     'Релевантные фрагменты базы знаний:',
     knowledgeText,
@@ -781,6 +790,7 @@ async function askDeepSeekChoice({
   vacancyText,
   resume,
   salary,
+  preferences,
   knowledgeBase,
   apiKey,
   apiUrl,
@@ -808,7 +818,7 @@ async function askDeepSeekChoice({
     'Формат строго такой: {"choices":["точный текст варианта"]}.',
     'Выбирай только из переданного списка вариантов, не придумывай новые.',
     'Для radio выбери ровно один вариант. Для checkbox можно выбрать один или несколько.',
-    'Опирайся на резюме и базу знаний. Зарплатные ожидания используй только если вопрос явно про зарплату. Если нельзя честно выбрать, верни {"choices":[]}.'
+    'Опирайся на резюме и базу знаний. Зарплатные ожидания используй только если вопрос явно про зарплату. На вопросы о переезде/занятости/командировках/графике/формате опирайся только на «Предпочтения кандидата». Если нельзя честно выбрать, верни {"choices":[]}.'
   ].join(' ');
 
   const user = [
@@ -828,6 +838,9 @@ async function askDeepSeekChoice({
     '',
     'Зарплатные ожидания:',
     includeSalary ? (salary || 'Зарплатные ожидания не заполнены.') : 'Не использовать: вопрос не про зарплату.',
+    '',
+    'Предпочтения кандидата (переезд/занятость/командировки/график/формат — отвечать о них только отсюда):',
+    (typeof preferences === 'string' && preferences.trim()) ? preferences : 'не заданы',
     '',
     'Релевантные фрагменты базы знаний:',
     knowledgeText
@@ -1254,7 +1267,7 @@ async function collectTextFields(page) {
 }
 
 async function askDeepSeekForm({ fields, choiceGroups, vacancy, deepSeekContext }) {
-  const { resume, salary, knowledgeBase, apiKey, apiUrl, model, debugAi } = deepSeekContext;
+  const { resume, salary, preferences, knowledgeBase, apiKey, apiUrl, model, debugAi } = deepSeekContext;
   if (!apiKey) return { fields: [], choices: [] };
 
   const allContexts = [
@@ -1281,6 +1294,7 @@ async function askDeepSeekForm({ fields, choiceGroups, vacancy, deepSeekContext 
     'Пиши без канцелярита и штампов; можно от первого лица, если так проще и естественнее.',
     'Для зарплаты верни только сумму или вилку из зарплатных ожиданий.',
     'Зарплатные ожидания используй только для salary-полей или salary-вопросов.',
+    'На вопросы о переезде/занятости/командировках/графике/формате отвечай только из «Предпочтения кандидата»; если нужного нет — не добавляй поле/выбор.',
     'Для checkbox можно выбрать несколько вариантов, для radio ровно один.',
     'Если для поля нельзя честно ответить, не добавляй его в fields/choices.',
     'Не выдумывай личные факты, места работы, проекты и контакты.'
@@ -1311,6 +1325,9 @@ async function askDeepSeekForm({ fields, choiceGroups, vacancy, deepSeekContext 
     '',
     'Зарплатные ожидания:',
     needsSalary ? (salary || 'Зарплатные ожидания не заполнены.') : 'Не использовать: в форме нет salary-вопросов.',
+    '',
+    'Предпочтения кандидата (переезд/занятость/командировки/график/формат — отвечать о них только отсюда):',
+    (typeof preferences === 'string' && preferences.trim()) ? preferences : 'не заданы',
     '',
     'Релевантные фрагменты базы знаний:',
     knowledgeText
@@ -1637,10 +1654,18 @@ async function buildDeepSeekContextForAccount(account, sharedContext) {
     'Замените этот текст на реальные зарплатные ожидания'
   ]);
 
+  // preferences.txt — необязательный файл со структурированными предпочтениями кандидата
+  // (переезд/занятость/командировки/график). Шаблон не создаём — файл опционален.
+  const preferencesPath = getAccountPreferencesPath(account);
+  const preferences = stripTemplateText(await readOptionalText(preferencesPath), [
+    'Заполните предпочтения кандидата'
+  ]);
+
   return {
     ...sharedContext,
     resume,
     salary,
+    preferences,
     resumePath,
     salaryPath
   };

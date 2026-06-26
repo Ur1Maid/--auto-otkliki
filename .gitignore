@@ -4,6 +4,7 @@ node_modules/
 .env
 config/accounts/*/resume.md
 config/accounts/*/salary.md
+config/accounts/*/preferences.txt
 logs/responses-log.jsonl
 logs/responses-*.jsonl
 logs/deepseek-debug.jsonl

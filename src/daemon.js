@@ -152,13 +152,14 @@ export async function runMessagesPass(opts, report, tracker) {
       // иначе generateReply не имеет ни эндпоинта, ни данных кандидата → всё в manual.
       // Профиль скоупится по аккаунту (loadAccountProfile) — без утечки между аккаунтами.
       // Ключ не логируется (processUnread его не пишет).
-      const { resumeProfile, salary } = await loadAccountProfile(account);
+      const { resumeProfile, salary, preferences } = await loadAccountProfile(account);
       const deepSeekContext = {
         apiKey,
         apiUrl: process.env.DEEPSEEK_API_URL || DEFAULT_DEEPSEEK_API_URL,
         model: process.env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL,
         resumeProfile,
         salary,
+        preferences,
       };
 
       // confirmFn: если не replyAuto — спрашиваем оператора через промпт.
@@ -170,6 +171,7 @@ export async function runMessagesPass(opts, report, tracker) {
         account,
         dryRun: opts.dryRun,
         replyAuto: opts.replyAuto,
+        includeRead: opts.replyRead,
         deepSeekContext,
         tracker,
         confirmFn,
@@ -224,11 +226,18 @@ export async function runMicroEditPass(opts, report) {
       const { page } = launched;
 
       const result = await microEditResume(page, { dryRun: opts.dryRun });
-      const diff = result.change ? ` [${result.change}: "${result.beforeTail}" → "${result.afterTail}"]` : '';
-      console.log(`[daemon] [${account}] Правка резюме: ${result.reason} (changed=${result.changed})${diff}`);
+      const perResume = Array.isArray(result.results) ? result.results : [];
 
-      // В отчёт: applied только при реально сохранённой правке. dry-run → не applied.
-      report.recordResumeEdit({ account, applied: result.changed });
+      if (perResume.length === 0) {
+        console.log(`[daemon] [${account}] Правка резюме: ${result.reason} (резюме не найдено)`);
+      }
+      // Логируем и фиксируем в отчёт КАЖДОЕ резюме отдельно (мультирезюме).
+      for (const r of perResume) {
+        const diff = r.change ? ` [${r.change}: "${r.beforeTail}" → "${r.afterTail}"]` : '';
+        console.log(`[daemon] [${account}] Резюме ${r.hash.slice(0, 8)}…: ${r.reason} (changed=${r.changed})${diff}`);
+        // В отчёт: applied только при реально сохранённой правке. dry-run → не applied.
+        report.recordResumeEdit({ account, applied: r.changed });
+      }
     } catch (err) {
       // Изоляция аккаунта: один не роняет день.
       console.error(`[daemon] [${account}] Ошибка правки резюме: ${err.message}`);
