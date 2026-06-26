@@ -94,6 +94,22 @@ test('buildReplyMessages: user содержит resumeProfile', () => {
   assert.ok(user.content.includes(profile), `user: ${user.content}`);
 });
 
+test('buildReplyMessages: стабильный контекст (профиль) идёт ДО переменного сообщения работодателя (инвариант context-cache)', () => {
+  const profile = 'Роль: DevOps\nНавыки: Docker, k8s';
+  const [, user] = buildReplyMessages({
+    resumeProfile: profile,
+    employerMessage: 'Когда сможете выйти?',
+    vacancyTitle: 'SRE',
+  });
+  const profileIdx = user.content.indexOf('Профиль кандидата');
+  const messageIdx = user.content.indexOf('--- СООБЩЕНИЕ РАБОТОДАТЕЛЯ');
+  assert.ok(profileIdx >= 0 && messageIdx >= 0, `оба блока должны быть: ${user.content}`);
+  assert.ok(
+    profileIdx < messageIdx,
+    `стабильный профиль должен предшествовать переменному сообщению (кэш-префикс): ${user.content}`,
+  );
+});
+
 test('buildReplyMessages: зарплата включается в user-блок если задана', () => {
   const [, user] = buildReplyMessages({ salary: '250 000 руб.' });
   assert.ok(user.content.includes('250 000 руб.'), `user: ${user.content}`);
