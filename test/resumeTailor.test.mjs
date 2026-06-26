@@ -8,7 +8,6 @@ import {
   backupFileName,
   DEFAULT_MAX_CHANGED_LINES,
   DEFAULT_MIN_SIMILARITY,
-  DEFAULT_MAX_NEW_SKILLS,
 } from '../src/lib/resumeTailor.js';
 
 // ─── computeDivergence ────────────────────────────────────────────────────────

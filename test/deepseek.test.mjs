@@ -151,9 +151,7 @@ test('callDeepSeek: успех с первой попытки → fetch вызв
 
 test('callDeepSeek: sleep вызывается с задержками 500ms и 1000ms при двух ретраях', async () => {
   const delays = [];
-  let callCount = 0;
   globalThis.fetch = async () => {
-    callCount++;
     throw new Error('network failure');
   };
 

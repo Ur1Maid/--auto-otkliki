@@ -320,7 +320,7 @@ test('write_failed: backup ок, writeFile для resume бросает → writ
   let callCount = 0;
   const deps = {
     readFile: async () => RESUME_NO_SKILLS,
-    writeFile: async (p) => {
+    writeFile: async (_p) => {
       callCount++;
       if (callCount === 2) {
         // второй вызов — запись resume.md → бросаем ошибку

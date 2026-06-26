@@ -28,7 +28,7 @@ function makeMockFrame({ editable = true, enabled = true, clickThrows = false } 
     isEnabled: 0,
   };
 
-  function makeLocator(selector) {
+  function makeLocator(_selector) {
     return {
       isEditable() {
         calls.isEditable += 1;

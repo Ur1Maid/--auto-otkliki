@@ -41,5 +41,11 @@ jobs:
             node --check "$f"
           done
 
+      - name: Lint (eslint)
+        run: npm run lint
+
       - name: Run tests
         run: npm test
+
+      - name: Coverage (c8, src/lib)
+        run: npm run coverage

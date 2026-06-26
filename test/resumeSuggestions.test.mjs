@@ -44,8 +44,7 @@ test('honesty H2: whitelist-навык с хвостовой точкой («Hel
 
 test('honesty: навык вне whitelist и ОТСУТСТВУЮЩИЙ в резюме → корректно предлагается', () => {
   const summary = makeSummary([{ name: 'Jenkins', count: 9 }]);
-  const resumeText = 'Опыт: Docker, Kubernetes. (Jenkins не упоминается)';
-  // "Jenkins" фигурирует в скобке выше — заменим на чистое резюме без него:
+  // Чистое резюме без Jenkins (чтобы навык корректно предлагался как отсутствующий):
   const clean = 'Опыт: Docker, Kubernetes, Terraform.';
   const result = buildResumeSuggestions({ summary, resumeText: clean });
   assert.ok(result.skillSuggestions.some((s) => s.skill === 'Jenkins'));

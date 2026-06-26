@@ -20,8 +20,8 @@ import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
 import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
 import { extractRequirements } from './lib/vacancyExtract.js';
-import { detectFieldKind, getMainQuestion, isGenericFieldContext, isSalaryContext } from './lib/fields.js';
-import { RESUME_KEYWORDS, extractResumeKeywords, getSearchTerms, pickKnowledgeChunks } from './lib/knowledge.js';
+import { detectFieldKind, getMainQuestion, isSalaryContext } from './lib/fields.js';
+import { extractResumeKeywords, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { prioritizeRemoteFirst, looksRemoteInText } from './lib/vacancyPriority.js';
 import { randomDelayMs } from './lib/pacing.js';
@@ -1060,6 +1060,9 @@ async function getFieldContext(field) {
   }).catch(() => '');
 }
 
+// TODO(dead-code): старый per-field подход, заменён bulk-функцией askDeepSeekForm.
+// Не вызывается; askDeepSeekChoice используется только отсюда. Удалять кластером отдельно.
+// eslint-disable-next-line no-unused-vars
 async function fillDeepSeekTextFields(page, deepSeekContext, vacancy) {
   let filled = 0;
   const fields = page.locator('textarea, input[type="text"]');
@@ -1203,6 +1206,8 @@ async function getChoiceGroups(page) {
   }).catch(() => []);
 }
 
+// TODO(dead-code): см. fillDeepSeekTextFields — тот же мёртвый per-field кластер.
+// eslint-disable-next-line no-unused-vars
 async function fillDeepSeekChoiceGroups(page, deepSeekContext, vacancy) {
   let selected = 0;
   const groups = await getChoiceGroups(page);

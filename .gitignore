@@ -19,6 +19,8 @@ data/*.txt
 data/score-cache.json
 playwright-report/
 test-results/
+coverage/
+.nyc_output/
 ralph/logs/
 ralph/STOP
 
