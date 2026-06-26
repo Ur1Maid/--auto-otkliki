@@ -1,0 +1,74 @@
+<!-- Синтетическая фикстура: открытый тред chatik.hh.ru.
+     Все компании, имена, ID и тексты — выдуманные. PII отсутствует. -->
+<div data-qa="chatik-layout" class="chatik-layout chatik-layout--open">
+
+  <!-- Шапка открытого чата -->
+  <div class="chatik-header">
+    <a data-qa="chatik-header-vacancy-link" href="/vacancy/9876543210?hhtmFrom=chat">
+      <span data-qa="chatik-header-vacancy-link-text">DevOps-инженер</span>
+    </a>
+    <span class="chatik-header__company">ООО СинтетикСофт</span>
+  </div>
+
+  <!-- Список сообщений треда -->
+  <div class="chatik-messages-list">
+
+    <!-- Сообщение 1: СВОЁ (кандидат) — msgId=1001 -->
+    <!-- author-name ОТСУТСТВУЕТ; присутствуют статус-иконки и applicant-action -->
+    <div data-qa="chatik-chat-message-1001" class="chat-message chat-message--outgoing">
+      <div data-qa="chatik-chat-message-1001-text" class="chat-message__text-wrapper">
+        <div data-qa="chat-bubble-text" class="chat-bubble chat-bubble--outgoing">
+          <span class="markdown markdown--chat">
+            <p>Здравствуйте, заинтересован в вакансии</p>
+          </span>
+        </div>
+        <span data-qa="chat-buble-display-time" class="chat-bubble__time">09:00</span>
+        <span data-qa="chat-bubble-icon-read" class="chat-bubble__icon-read"></span>
+        <span data-qa="chatik-chat-message-applicant-action" class="chat-message__action">
+          Отклик отправлен
+        </span>
+      </div>
+    </div>
+
+    <!-- Сообщение 2: ВХОДЯЩЕЕ (работодатель) — msgId=1002 -->
+    <!-- author-name ПРИСУТСТВУЕТ; HTML-сущности и <strong> внутри текста -->
+    <div data-qa="chatik-chat-message-1002" class="chat-message chat-message--incoming">
+      <div data-qa="chatik-chat-message-1002-text" class="chat-message__text-wrapper">
+        <span data-qa="chat-bubble-author-name" class="chat-bubble__author">Анна Тестова</span>
+        <div data-qa="chat-bubble-text" class="chat-bubble chat-bubble--incoming">
+          <span class="markdown markdown--chat">
+            <p>Спасибо за отклик! Компания &quot;СинтетикСофт&quot; готова обсудить.</p>
+            <p>Когда вам <strong>удобно</strong> созвониться?</p>
+          </span>
+        </div>
+        <span data-qa="chat-buble-display-time" class="chat-bubble__time">10:15</span>
+      </div>
+    </div>
+
+    <!-- Сообщение 3: ВХОДЯЩЕЕ (работодатель) — msgId=1003 -->
+    <!-- ВТОРОЕ входящее — lastEmployerMessage должно вернуть ИМЕННО ЕГО -->
+    <div data-qa="chatik-chat-message-1003" class="chat-message chat-message--incoming">
+      <div data-qa="chatik-chat-message-1003-text" class="chat-message__text-wrapper">
+        <span data-qa="chat-bubble-author-name" class="chat-bubble__author">Анна Тестова</span>
+        <div data-qa="chat-bubble-text" class="chat-bubble chat-bubble--incoming">
+          <span class="markdown markdown--chat">
+            <p>Подскажите ваш телефон &amp; удобное время для связи</p>
+          </span>
+        </div>
+        <span data-qa="chat-buble-display-time" class="chat-bubble__time">10:30</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Поле ввода и кнопка отправки (парсер не трогает) -->
+  <div class="chatik-composer">
+    <textarea
+      data-qa="chatik-new-message-text"
+      placeholder="Сообщение"
+      class="chatik-composer__textarea"
+    ></textarea>
+    <button data-qa="chatik-do-send-message" class="chatik-composer__send">Отправить</button>
+  </div>
+
+</div>

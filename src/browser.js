@@ -16,10 +16,18 @@ export async function launchBrowser({ account = 'default', storageStatePath = ge
     headless: false,
     slowMo: 80
   });
-  const context = await browser.newContext(contextOptions);
-  const page = await context.newPage();
 
-  return { browser, context, page };
+  // Если создание контекста/страницы упадёт после успешного launch (напр. битый
+  // storageState), браузер уже запущен — закрываем его, чтобы процесс не осиротел
+  // (важно для демона, работающего часами).
+  try {
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    return { browser, context, page };
+  } catch (error) {
+    await browser.close().catch(() => {});
+    throw error;
+  }
 }
 
 export async function dismissHarmlessPopups(page) {

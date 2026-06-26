@@ -39,5 +39,5 @@ try {
   await context.storageState({ path: storageStatePath });
   console.log(`Сессия сохранена: ${storageStatePath}`);
 } finally {
-  await browser.close();
+  await browser.close().catch(() => {});
 }

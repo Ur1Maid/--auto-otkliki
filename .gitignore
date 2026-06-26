@@ -4,8 +4,25 @@ node_modules/
 .env
 config/accounts/*/resume.md
 config/accounts/*/salary.md
+config/accounts/*/preferences.txt
 logs/responses-log.jsonl
 logs/responses-*.jsonl
 logs/deepseek-debug.jsonl
+logs/resume-upgrade-*.md
+logs/summary.json
+logs/summary-*.json
+logs/daily-*.json
+logs/alerts.jsonl
+logs/*.log
+data/*.md
+data/*.txt
+data/score-cache.json
 playwright-report/
 test-results/
+coverage/
+.nyc_output/
+ralph/logs/
+ralph/STOP
+
+# Daemon control file (transient)
+DAEMON_STOP

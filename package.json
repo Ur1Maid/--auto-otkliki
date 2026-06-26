@@ -9,12 +9,23 @@
     "review": "node src/review.js",
     "review:auto": "node src/review.js --limit 200",
     "review:manual": "node src/review.js --manual",
-    "check": "node src/check.js"
+    "daemon": "node src/daemon.js",
+    "dashboard": "node src/dashboard.js",
+    "check": "node src/check.js",
+    "test": "node --test",
+    "lint": "eslint .",
+    "coverage": "c8 --reporter=text --reporter=lcov --src src/lib --include \"src/lib/**\" node --test",
+    "ralph": "powershell -ExecutionPolicy Bypass -File ralph/ralph.ps1"
   },
   "dependencies": {
     "playwright": "^1.52.0"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.5.0"
   }
 }

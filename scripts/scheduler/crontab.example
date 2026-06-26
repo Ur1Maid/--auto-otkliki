@@ -1,0 +1,27 @@
+# hh-auto-otkliki — расписание для сервера (Linux cron).
+#
+# Идея: демон НЕ крутится постоянно. Cron ЗАПУСКАЕТ один шаг и процесс выходит —
+# дёшево по ресурсам. Каждая строка = один `node src/daemon.js --task <job>`.
+#
+# Установка:
+#   1) Поставь системную TZ в МСК ИЛИ оставь UTC и пересчитай часы (8:00 МСК = 5:00 UTC).
+#      Ниже времена даны для CRON_TZ=Europe/Moscow (cron в vixie-cron/cronie это поддерживает).
+#   2) Замени /opt/hh-auto-otkliki на реальный путь к репозиторию.
+#   3) DEEPSEEK_API_KEY должен быть в .env репозитория (его грузит daemon на старте).
+#   4) crontab -e  →  вставь строки ниже.
+#
+# LIVE-режим (реальные действия на hh.ru) включается флагом --live.
+# Авто-отправка ответов в чате — флагом --reply-auto.
+# Без них демон работает в безопасном dry-run (ничего наружу не уйдёт).
+
+CRON_TZ=Europe/Moscow
+HH=/opt/hh-auto-otkliki
+
+# Читать все письма — каждые 10 минут.
+*/10 * * * *  cd $HH && /usr/bin/node src/daemon.js --task messages --accounts belonogov,fedorov,startsev --live --reply-auto >> logs/cron-messages.log 2>&1
+
+# Обновлять/поднимать резюме — каждые 30 минут.
+*/30 * * * *  cd $HH && /usr/bin/node src/daemon.js --task resume --accounts belonogov,fedorov,startsev --live >> logs/cron-resume.log 2>&1
+
+# Пачка откликов — каждый день в 08:00 МСК.
+0 8 * * *     cd $HH && /usr/bin/node src/daemon.js --task apply --accounts belonogov,fedorov,startsev --text DevOps --area 1 --limit 200 --live >> logs/cron-apply.log 2>&1
