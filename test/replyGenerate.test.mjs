@@ -220,6 +220,38 @@ test('generateReply: ok-ответ без лишних кавычек перед
   assert.equal(result.text, 'Готов к переезду.');
 });
 
+test('generateReply: ведущее приветствие срезается из ответа', async () => {
+  const mock = makeMock({ ok: true, content: 'Здравствуйте! Готов выйти с понедельника.' });
+  const result = await generateReply(
+    { employerMessage: 'Когда сможете выйти?', apiKey: 'key', apiUrl: 'u', model: 'm' },
+    { callDeepSeek: mock },
+  );
+  assert.equal(result.status, 'ok');
+  assert.equal(result.text, 'Готов выйти с понедельника.');
+});
+
+test('generateReply: preferences прокидываются в prompt (capturing mock)', async () => {
+  let captured = null;
+  const capturingMock = async (args) => {
+    captured = args.messages;
+    return { ok: true, content: 'Готов.' };
+  };
+  await generateReply(
+    {
+      employerMessage: 'Готовы к командировкам?',
+      preferences: 'Командировки: только по РФ, до 2 недель.',
+      apiKey: 'key', apiUrl: 'u', model: 'm',
+    },
+    { callDeepSeek: capturingMock },
+  );
+  assert.ok(captured, 'messages должны быть переданы');
+  const userContent = captured[1].content;
+  assert.ok(
+    userContent.includes('Командировки: только по РФ'),
+    `preferences должны попасть в user-промпт: ${userContent}`,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // generateReply — статус no_answer
 // ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ import {
 } from './config.js';
 import { dismissHarmlessPopups, launchBrowser } from './browser.js';
 import { ask } from './prompts.js';
-import { cleanGeneratedAnswer, parseJsonObject } from './lib/text.js';
+import { cleanGeneratedAnswer, parseJsonObject, stripLeadingGreeting } from './lib/text.js';
 import { extractRequirements } from './lib/vacancyExtract.js';
 import { detectFieldKind, getMainQuestion, isSalaryContext } from './lib/fields.js';
 import { extractResumeKeywords, pickKnowledgeChunks } from './lib/knowledge.js';
@@ -776,7 +776,8 @@ async function askDeepSeek({
   }
 
   const rawAnswer = result.content;
-  const answer = cleanGeneratedAnswer(rawAnswer);
+  // stripLeadingGreeting — пост-страховка к гардрейлу «без приветствия» (модель иногда нарушает).
+  const answer = stripLeadingGreeting(cleanGeneratedAnswer(rawAnswer));
   const safeAnswer = kind === 'coverLetter' && looksLikeEmployerVoice(answer) ? '' : answer;
 
   await appendDeepSeekDebug({

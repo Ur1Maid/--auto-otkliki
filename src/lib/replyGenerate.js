@@ -10,7 +10,7 @@
 //     → { status: 'ok'|'no_answer'|'manual'|'error', text: string, reason?: string }
 
 import { callDeepSeek as realCallDeepSeek } from './deepseek.js';
-import { cleanGeneratedAnswer } from './text.js';
+import { cleanGeneratedAnswer, stripLeadingGreeting } from './text.js';
 import { looksLikeEmployerVoice } from './answers.js';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +74,7 @@ export function buildReplyMessages({ employerMessage, vacancyTitle, resumeProfil
  *   vacancyTitle?: string,
  *   resumeProfile?: string,
  *   salary?: string,
+ *   preferences?: string,
  *   apiKey?: string,
  *   apiUrl?: string,
  *   model?: string,
@@ -87,6 +88,7 @@ export async function generateReply(params = {}, deps = {}) {
     vacancyTitle,
     resumeProfile,
     salary,
+    preferences,
     apiKey,
     apiUrl,
     model,
@@ -99,7 +101,7 @@ export async function generateReply(params = {}, deps = {}) {
     return { status: 'error', text: '', reason: 'нет ключа' };
   }
 
-  const messages = buildReplyMessages({ employerMessage, vacancyTitle, resumeProfile, salary });
+  const messages = buildReplyMessages({ employerMessage, vacancyTitle, resumeProfile, salary, preferences });
 
   const result = await callDeepSeek({
     apiKey,
@@ -117,7 +119,9 @@ export async function generateReply(params = {}, deps = {}) {
 
   // Приводим content к строке (не-строка от стороннего callDeepSeek не должна ронять прогон).
   const rawContent = typeof result.content === 'string' ? result.content : '';
-  const cleaned = cleanGeneratedAnswer(rawContent);
+  // Пост-страховка: снимаем ведущее приветствие, если модель его всё же добавила
+  // (гардрейл «без приветствия» в системном промпте иногда не соблюдается).
+  const cleaned = stripLeadingGreeting(cleanGeneratedAnswer(rawContent));
 
   // Модель вернула NO_ANSWER (целиком ИЛИ ведущим токеном, напр. "NO_ANSWER, мало данных")
   // или пустоту → пометить на ручную (M4.6). Ведущий-NO_ANSWER ловим отдельно, т.к.
