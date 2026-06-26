@@ -72,6 +72,8 @@ export function createDailyReport() {
   let tokCompletion = 0;
   let tokCacheHit = 0;
   let tokCalls = 0;
+  let apiErrors = 0;
+  let balanceExhausted = false;
 
   /**
    * Аккумулирует один per-account прогон в дневные тоталы.
@@ -143,6 +145,8 @@ export function createDailyReport() {
     tokCompletion += Number(usageSnapshot.completionTokens) || 0;
     tokCacheHit += Number(usageSnapshot.cacheHitTokens) || 0;
     tokCalls += Number(usageSnapshot.calls) || 0;
+    apiErrors += Number(usageSnapshot.apiErrors) || 0;
+    if (usageSnapshot.balanceExhausted === true) balanceExhausted = true;
   }
 
   /**
@@ -190,6 +194,8 @@ export function createDailyReport() {
         completionTokens: tokCompletion,
         cacheHitTokens: tokCacheHit,
         calls: tokCalls,
+        apiErrors,
+        balanceExhausted,
       },
     };
   }

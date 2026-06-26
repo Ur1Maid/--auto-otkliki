@@ -12,6 +12,7 @@ logs/resume-upgrade-*.md
 logs/summary.json
 logs/summary-*.json
 logs/daily-*.json
+logs/alerts.jsonl
 logs/*.log
 data/*.md
 data/*.txt

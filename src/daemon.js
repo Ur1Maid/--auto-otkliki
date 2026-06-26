@@ -26,7 +26,7 @@
  *   Рабочие часы МСК НЕ проверяются (временем управляет шедулер ОС).
  */
 
-import { writeFile } from 'node:fs/promises';
+import { writeFile, appendFile, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,12 +35,14 @@ import { spawn } from 'node:child_process';
 import { decideNextAction, ACTIONS } from './lib/daemonPlan.js';
 import { isStopRequested, runIsolatedTask } from './lib/isolate.js';
 import { createDailyReport, dailyReportFileName } from './lib/dailyReport.js';
+import { evaluateAlerts } from './lib/alerts.js';
 import { processUnread } from './messages.js';
 import { createProcessedTracker } from './lib/replySend.js';
 import { microEditResume } from './lib/resumeEdit.js';
 import { loadAccountProfile } from './lib/accountProfile.js';
 import { launchBrowser } from './browser.js';
-import { rootDir, logsDir } from './config.js';
+import { rootDir, logsDir, getAccountSummaryPath } from './config.js';
+import { runUsageCounter } from './lib/usageCounter.js';
 import { confirm } from './prompts.js';
 import { parseDaemonArgs, buildReviewChildArgs } from './lib/daemonArgs.js';
 
@@ -115,12 +117,45 @@ export async function runApplyPass(opts, report) {
 
   console.log('[daemon] review.js args:', childArgs.join(' '));
 
+  // Запоминаем момент перед запуском: ниже берём только summary, переписанные ЭТИМ
+  // прогоном (по mtime), чтобы вчерашний balanceExhausted не поднял ложный алерт.
+  const startedAt = Date.now();
   const exitCode = await spawnNode([REVIEW_JS, ...childArgs]);
   console.log(`[daemon] review.js завершился с кодом ${exitCode}`);
 
-  // report.recordAccountRun не вызываем — числа возьмём из summary-*.json (review делает сам).
-  // Вместо этого фиксируем токены как 0 (нет прямого доступа без парсинга jsonl).
-  void report; // используется вызывающим для recordMessages и т.п.
+  // review.js — отдельный процесс со своим runUsageCounter, поэтому apiErrors/баланс/токены
+  // доходят до отчёта только через summary-*.json. Складываем их для алертинга и стоимости.
+  await foldApplyTokens(report, opts.accounts, startedAt);
+}
+
+/**
+ * Поднимает токены/ошибки/баланс из summary-*.json дочернего review.js в дневной отчёт.
+ * tokensRunCumulative — глобальный счётчик за весь процесс review (один файл покрывает
+ * весь apply-прогон), поэтому достаточно первого свежего summary. Берём только файлы,
+ * переписанные не раньше sinceMs (свежесть по mtime). Полностью best-effort: нет файла /
+ * битый JSON / устаревший → молча пропускаем, демон не падает.
+ *
+ * @param {object} report — createDailyReport()
+ * @param {string[]} accounts
+ * @param {number} sinceMs — Date.now() перед запуском review.js
+ * @returns {Promise<void>}
+ */
+async function foldApplyTokens(report, accounts, sinceMs) {
+  for (const account of accounts) {
+    try {
+      const p = getAccountSummaryPath(account);
+      const st = await stat(p);
+      if (st.mtimeMs < sinceMs) continue; // устаревший файл — не из этого прогона
+      const obj = JSON.parse(await readFile(p, 'utf8'));
+      const tok = obj?.tokensRunCumulative;
+      if (tok && typeof tok === 'object') {
+        report.recordTokens(tok);
+        return; // глобальный счётчик процесса — один файл покрывает весь apply-прогон
+      }
+    } catch {
+      // нет файла / битый JSON — пропускаем (best-effort)
+    }
+  }
 }
 
 /**
@@ -269,6 +304,61 @@ async function writeDailyReport(report) {
   }
 }
 
+/**
+ * Оценивает дневной снапшот против порогов и доставляет алерты:
+ *   - в консоль (critical → error, warn → warn),
+ *   - дозаписью в logs/alerts.jsonl,
+ *   - опц. вебхуком, если задан process.env.ALERT_WEBHOOK_URL (off по умолчанию).
+ * Полностью best-effort: ни одна ветка не роняет демон. Секреты в payload не уходят
+ * (алерты — это только счётчики/сообщения).
+ *
+ * @param {object} report — createDailyReport()
+ * @param {Date} now
+ * @returns {Promise<void>}
+ */
+async function deliverAlerts(report, now) {
+  let alerts;
+  try {
+    const snap = report.snapshot(now);
+    alerts = evaluateAlerts(snap);
+  } catch (err) {
+    console.error('[daemon] Не удалось оценить алерты:', err.message);
+    return;
+  }
+  if (!alerts.length) return;
+
+  for (const a of alerts) {
+    const line = `[ALERT:${a.level}] ${a.message}`;
+    if (a.level === 'critical') console.error(line);
+    else console.warn(line);
+  }
+
+  // Файл-журнал алертов (git-ignored как остальные logs/*).
+  try {
+    const at = now instanceof Date && !isNaN(now.getTime()) ? now.toISOString() : null;
+    const rows = alerts.map((a) => JSON.stringify({ at, ...a })).join('\n') + '\n';
+    await appendFile(path.join(logsDir, 'alerts.jsonl'), rows);
+  } catch (err) {
+    console.error('[daemon] Не удалось записать alerts.jsonl:', err.message);
+  }
+
+  // Опциональный вебхук (Slack/Telegram-bot/любой POST-приёмник). Off, пока не задан env.
+  const webhook = process.env.ALERT_WEBHOOK_URL;
+  if (webhook) {
+    const text = alerts.map((a) => `[${a.level}] ${a.message}`).join('\n');
+    try {
+      await fetch(webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch (err) {
+      console.error('[daemon] Вебхук алерта недоступен:', err.message);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Режим одного шага (--task) — для внешнего шедулера
 // ---------------------------------------------------------------------------
@@ -307,7 +397,11 @@ export async function runSingleTask(opts) {
     console.error(`[daemon] Шаг ${opts.task} завершился с ошибкой:`, result.error.message);
   }
 
+  // In-process потребление DeepSeek (messages/resume идут в этом процессе) → в отчёт
+  // для алертинга по 402/ошибкам API. apply-токены уже сложены в runApplyPass из summary.
+  report.recordTokens(runUsageCounter.snapshot());
   await writeDailyReport(report);
+  await deliverAlerts(report, new Date());
   console.log(`[daemon] Итог шага: ${report.formatLine()}`);
   console.log('[daemon] Завершение (--task).');
 }
@@ -492,7 +586,11 @@ export async function main() {
   // ---------------------------------------------------------------------------
   // Дневной отчёт
   // ---------------------------------------------------------------------------
+  // In-process потребление DeepSeek за день (messages/resume) → в отчёт для алертинга.
+  // apply-токены уже сложены в runApplyPass из summary-*.json.
+  report.recordTokens(runUsageCounter.snapshot());
   await writeDailyReport(report);
+  await deliverAlerts(report, new Date());
 
   console.log(`[daemon] Итог дня: ${report.formatLine()}`);
   console.log('[daemon] Завершение.');

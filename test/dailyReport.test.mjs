@@ -52,7 +52,7 @@ test('createDailyReport: snapshot() без аргумента → date null, в�
   assert.deepEqual(s.applications, { viewed: 0, applied: 0, skipped: 0, manual: 0, alreadyApplied: 0, dryRun: 0, errors: 0 });
   assert.deepEqual(s.messages, { processed: 0, replied: 0, skippedNoReply: 0, manual: 0 });
   assert.deepEqual(s.resume, { editsApplied: 0, editsSkipped: 0, addedSkillsTotal: 0 });
-  assert.deepEqual(s.tokens, { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, calls: 0 });
+  assert.deepEqual(s.tokens, { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, calls: 0, apiErrors: 0, balanceExhausted: false });
 });
 
 // ─── snapshot(date) ───────────────────────────────────────────────────────────
@@ -292,6 +292,16 @@ test('recordTokens: имена полей совпадают с usageCounter sna
   assert.equal(s.tokens.completionTokens, 600);
   assert.equal(s.tokens.cacheHitTokens, 200);
   // totalTokens не аккумулируется отдельно в dailyReport (производное)
+});
+
+test('recordTokens: apiErrors суммируются, balanceExhausted липкий (для алертинга)', () => {
+  const r = createDailyReport();
+  r.recordTokens({ calls: 1, apiErrors: 2, balanceExhausted: false });
+  r.recordTokens({ calls: 1, apiErrors: 1, balanceExhausted: true });
+  r.recordTokens({ calls: 1, apiErrors: 0, balanceExhausted: false }); // не сбрасывает флаг
+  const s = r.snapshot();
+  assert.equal(s.tokens.apiErrors, 3);
+  assert.equal(s.tokens.balanceExhausted, true);
 });
 
 test('recordTokens: нечисловые поля → 0 (не бросает)', () => {

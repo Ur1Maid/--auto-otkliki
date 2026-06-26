@@ -12,6 +12,8 @@ test('createUsageCounter: новый счётчик → snapshot нули, calls
     completionTokens: 0,
     totalTokens: 0,
     cacheHitTokens: 0,
+    apiErrors: 0,
+    balanceExhausted: false,
   });
 });
 
@@ -26,6 +28,8 @@ test('record с валидным usage → корректные суммы', () 
     completionTokens: 20,
     totalTokens: 120,
     cacheHitTokens: 80,
+    apiErrors: 0,
+    balanceExhausted: false,
   });
 });
 
@@ -39,6 +43,8 @@ test('несколько record → суммируются', () => {
     completionTokens: 50,
     totalTokens: 350,
     cacheHitTokens: 60,
+    apiErrors: 0,
+    balanceExhausted: false,
   });
 });
 
@@ -137,6 +143,7 @@ test('два createUsageCounter() не делят состояние', () => {
 test('reset обнуляет все счётчики', () => {
   const c = createUsageCounter();
   c.record({ prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 50 });
+  c.recordError(402);
   c.reset();
   assert.deepEqual(c.snapshot(), {
     calls: 0,
@@ -144,5 +151,28 @@ test('reset обнуляет все счётчики', () => {
     completionTokens: 0,
     totalTokens: 0,
     cacheHitTokens: 0,
+    apiErrors: 0,
+    balanceExhausted: false,
   });
+});
+
+// --- recordError (для алертинга) ---
+
+test('recordError инкрементит apiErrors, не трогает calls/токены', () => {
+  const c = createUsageCounter();
+  c.recordError(500);
+  c.recordError(429);
+  const s = c.snapshot();
+  assert.equal(s.apiErrors, 2);
+  assert.equal(s.calls, 0);
+  assert.equal(s.balanceExhausted, false);
+});
+
+test('recordError(402) выставляет липкий balanceExhausted', () => {
+  const c = createUsageCounter();
+  c.recordError(402);
+  assert.equal(c.snapshot().balanceExhausted, true);
+  c.recordError(500); // последующая не-402 не сбрасывает флаг
+  assert.equal(c.snapshot().balanceExhausted, true);
+  assert.equal(c.snapshot().apiErrors, 2);
 });

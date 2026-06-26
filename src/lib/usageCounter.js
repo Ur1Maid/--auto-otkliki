@@ -11,6 +11,8 @@ export function createUsageCounter() {
   let promptTokens = 0;
   let completionTokens = 0;
   let cacheHitTokens = 0;
+  let apiErrors = 0;
+  let balanceExhausted = false;
 
   /**
    * Записывает одну запись usage из ответа DeepSeek.
@@ -29,8 +31,18 @@ export function createUsageCounter() {
   }
 
   /**
+   * Фиксирует НЕуспешный ответ API (для алертинга). HTTP 402 = «недостаточно баланса»
+   * (см. deepseek.md) → выставляет липкий флаг balanceExhausted. Никогда не бросает.
+   * @param {number} status — HTTP-статус (0 = сеть/таймаут)
+   */
+  function recordError(status) {
+    apiErrors += 1;
+    if (Number(status) === 402) balanceExhausted = true;
+  }
+
+  /**
    * Возвращает снимок текущих счётчиков.
-   * @returns {{ calls: number, promptTokens: number, completionTokens: number, totalTokens: number, cacheHitTokens: number }}
+   * @returns {{ calls: number, promptTokens: number, completionTokens: number, totalTokens: number, cacheHitTokens: number, apiErrors: number, balanceExhausted: boolean }}
    */
   function snapshot() {
     return {
@@ -39,6 +51,8 @@ export function createUsageCounter() {
       completionTokens,
       totalTokens: promptTokens + completionTokens,
       cacheHitTokens,
+      apiErrors,
+      balanceExhausted,
     };
   }
 
@@ -57,9 +71,11 @@ export function createUsageCounter() {
     promptTokens = 0;
     completionTokens = 0;
     cacheHitTokens = 0;
+    apiErrors = 0;
+    balanceExhausted = false;
   }
 
-  return { record, snapshot, formatSummary, reset };
+  return { record, recordError, snapshot, formatSummary, reset };
 }
 
 // Синглтон для реального прогона. Тесты создают свои инстансы через createUsageCounter().

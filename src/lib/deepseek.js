@@ -69,6 +69,7 @@ export async function callDeepSeek({
     if (!response) {
       lastResult = { ok: false, status: 0, body: '' };
       if (isTransient(0) && attempt < maxRetries) continue;
+      runUsageCounter.recordError(0);
       return lastResult;
     }
 
@@ -77,6 +78,7 @@ export async function callDeepSeek({
       console.log(`DeepSeek API вернул ошибку ${response.status}: ${body.slice(0, 200)}`);
       lastResult = { ok: false, status: response.status, body };
       if (isTransient(response.status) && attempt < maxRetries) continue;
+      runUsageCounter.recordError(response.status);
       return lastResult;
     }
 
