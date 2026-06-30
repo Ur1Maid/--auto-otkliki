@@ -44,6 +44,7 @@ import { launchBrowser } from './browser.js';
 import { rootDir, logsDir, getAccountSummaryPath } from './config.js';
 import { runUsageCounter } from './lib/usageCounter.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
+import { createResourceLogger } from './lib/resourceLog.js';
 import { confirm } from './prompts.js';
 import { parseDaemonArgs, buildReviewChildArgs } from './lib/daemonArgs.js';
 
@@ -516,6 +517,9 @@ export async function main() {
 
   let didRealWork = false; // для --once: выходим после первой не-IDLE/STOP итерации
 
+  // M11.4: логгер ресурсов — создаётся один раз, замыкание хранит prevCpu/prevTs.
+  const resourceLogger = createResourceLogger();
+
   // ---------------------------------------------------------------------------
   // Главный цикл
   // ---------------------------------------------------------------------------
@@ -529,6 +533,10 @@ export async function main() {
       console.log('[daemon] Остановка по запросу (DAEMON_STOP файл или SIGINT).');
       break;
     }
+
+    // M11.4: снимаем срез ресурсов раз в итерацию. openContexts=0 — прогоны открывают/закрывают
+    // свой браузер в finally (нет постоянных контекстов на границе итерации). Best-effort.
+    await resourceLogger({ openContexts: 0 });
 
     // b. Решение планировщика.
     const decision = decideNextAction({

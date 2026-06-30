@@ -12,6 +12,7 @@ export const statusDir = path.join(logsDir, 'status');
 export const configDir = path.join(rootDir, 'config');
 export const accountsConfigDir = path.join(configDir, 'accounts');
 export const logPath = path.join(logsDir, 'responses-log.jsonl');
+export const resourcesLogPath = path.join(logsDir, 'resources.jsonl');
 
 export function normalizeAccountName(account = 'default') {
   return String(account || 'default')

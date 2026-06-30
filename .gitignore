@@ -14,6 +14,7 @@ logs/summary-*.json
 logs/daily-*.json
 logs/alerts.jsonl
 logs/status/
+logs/resources.jsonl
 logs/*.log
 data/*.md
 data/*.txt
