@@ -427,7 +427,6 @@ const PAGE = `<!doctype html>
   .ctl-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
   .ctl-row:last-child { border-bottom: none; }
   .ctl-acc { font-weight: 600; min-width: 120px; }
-  .ctl-live { font-size: 12px; color: #ffb454; display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
   .ctl-btns { display: flex; gap: 6px; }
   .ctl-stop { border-color: #5a1f1f; }
   .ctl-status { margin-left: auto; font-size: 12px; }
@@ -461,7 +460,7 @@ const PAGE = `<!doctype html>
   <div class="sub">Локально (127.0.0.1). Фокус — текущий прогон: что программа делает сейчас. Агрегаты за всю историю — в блоке «История» ниже.</div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Управление задачами</h2>
-    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. Дефолт — <b>dry-run</b>; тумблер Live включает реальные действия (требует подтверждения).</div>
+    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. «Старт» = <b>реальный (LIVE) прогон</b> на hh.ru; перед запуском — одно подтверждение.</div>
     <div class="ctl-search" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
       <span class="sub">Поиск для «Отклики»:</span>
       <input id="srch-text" type="text" placeholder="text (напр. DevOps)" value="DevOps" style="flex: 1; min-width: 160px">
@@ -603,7 +602,7 @@ async function loadControl() {
     el.innerHTML = '<div class="muted">Аккаунтов не найдено (config/accounts/).</div>';
     return;
   }
-  // Per-account блок с per-task строками: каждая задача имеет свои Live/Старт/Стоп (M12.7).
+  // Per-account блок с per-task строками: каждая задача имеет свои Старт/Стоп (M12.7).
   el.innerHTML = controlAccounts.map((acc, i) =>
     '<div style="margin-bottom: 14px; border: 1px solid #242832; border-radius: 8px; padding: 10px 12px">' +
     '<div class="ctl-acc" style="margin-bottom: 8px">' + esc(acc) + '</div>' +
@@ -613,7 +612,7 @@ async function loadControl() {
       const running = !!run;
       let statusTxt, statusCls;
       if (running) {
-        statusTxt = (run.live ? 'LIVE' : 'dry-run') + (run.pid != null ? ' · pid ' + esc(run.pid) : '');
+        statusTxt = 'LIVE' + (run.pid != null ? ' · pid ' + esc(run.pid) : '');
         statusCls = 'st-run';
       } else if (controlStopped[key]) {
         statusTxt = 'остановлено'; statusCls = 'st-stop';
@@ -622,8 +621,6 @@ async function loadControl() {
       }
       return '<div class="ctl-row">' +
         '<div style="min-width: 90px; font-size: 13px">' + TASK_LABELS[tk] + '</div>' +
-        '<label class="ctl-live"><input type="checkbox" id="live-' + i + '-' + tk + '"' +
-          (running ? ' disabled' : '') + '> Live</label>' +
         '<button data-action="start" data-idx="' + i + '" data-task="' + tk + '"' +
           (running ? ' disabled' : '') + '>Старт</button>' +
         '<button class="ctl-stop" data-action="stop" data-idx="' + i + '" data-task="' + tk + '"' +
@@ -643,12 +640,10 @@ async function loadControl() {
 async function startTask(i, task) {
   const acc = controlAccounts[i];
   if (!acc) return;
-  const cb = document.getElementById('live-' + i + '-' + task);
-  const live = !!(cb && cb.checked);
-  if (live && !confirm('LIVE-запуск «' + (TASK_LABELS[task] || task) + '» для аккаунта «' + acc + '».\\n' +
-      'Это реальные действия наружу (отклики / ответы / правка резюме). Продолжить?')) return;
+  if (!confirm('Запустить РЕАЛЬНЫЙ прогон «' + (TASK_LABELS[task] || task) + '» для «' + acc + '»?\\n' +
+      'Это реальные отклики/ответы на hh.ru.')) return;
   delete controlStopped[acc + '\0' + task];
-  const payload = { task, account: acc, live };
+  const payload = { task, account: acc, live: true };
   if (task === 'apply') {
     const t = (document.getElementById('srch-text').value || '').trim();
     const a = (document.getElementById('srch-area').value || '').trim();
