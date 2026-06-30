@@ -368,6 +368,12 @@ const PAGE = `<!doctype html>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Управление задачами</h2>
     <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме. Дефолт — <b>dry-run</b> (без действий наружу); тумблер Live включает реальные действия (требует подтверждения). Одна задача на аккаунт.</div>
+    <div class="ctl-search" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+      <span class="sub">Поиск для «Отклики»:</span>
+      <input id="srch-text" type="text" placeholder="text (напр. DevOps)" value="DevOps" style="flex: 1; min-width: 160px">
+      <input id="srch-area" type="text" placeholder="area" value="1" title="регион hh.ru (1 = Москва)" style="width: 70px">
+      <input id="srch-limit" type="number" min="1" placeholder="limit" value="200" title="число откликов" style="width: 90px">
+    </div>
     <div id="controlBody" class="muted">Загрузка…</div>
   </div>
   <div class="panel" style="margin-bottom: 24px">
@@ -521,13 +527,22 @@ async function startTask(i, task) {
   if (!acc) return;
   const cb = document.getElementById('live-' + i);
   const live = !!(cb && cb.checked);
-  if (live && !confirm('LIVE-запуск «' + (TASK_LABELS[task] || task) + '» для аккаунта «' + acc + '».\n' +
+  if (live && !confirm('LIVE-запуск «' + (TASK_LABELS[task] || task) + '» для аккаунта «' + acc + '».\\n' +
       'Это реальные действия наружу (отклики / ответы / правка резюме). Продолжить?')) return;
   delete controlStopped[acc];
+  const payload = { task, account: acc, live };
+  if (task === 'apply') {
+    const t = (document.getElementById('srch-text').value || '').trim();
+    const a = (document.getElementById('srch-area').value || '').trim();
+    const l = Number(document.getElementById('srch-limit').value);
+    if (t) payload.text = t;
+    if (a) payload.area = a;
+    if (Number.isFinite(l) && l > 0) payload.limit = l;
+  }
   try {
     const res = await fetch('/api/start', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task, account: acc, live }),
+      body: JSON.stringify(payload),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) alert('Не удалось запустить: ' + (json.reason || res.status));
