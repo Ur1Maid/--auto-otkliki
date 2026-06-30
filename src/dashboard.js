@@ -438,6 +438,7 @@ const PAGE = `<!doctype html>
   .lv-working { background: #7bd88f; }
   .lv-stalled { background: #ff6b6b; }
   .lv-captcha { background: #ffb454; }
+  .lv-limit { background: #ffb454; }
   .lv-idle { background: #8a8f98; }
   .live-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
   .live-row:last-child { border-bottom: none; }
@@ -471,7 +472,7 @@ const PAGE = `<!doctype html>
   </div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Сейчас</h2>
-    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Живое обновление (SSE, &lt; 0,5 с).</div>
+    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-limit"></span> лимит откликов · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Живое обновление (SSE, &lt; 0,5 с).</div>
     <div id="liveRes" class="muted" style="margin-bottom: 10px"></div>
     <div id="liveBody" class="muted">Загрузка…</div>
   </div>
@@ -687,7 +688,7 @@ async function stopTask(i, task) {
 }
 
 // --- Блок «Сейчас» (M11.11, обновлён M12.8): живое состояние — одна строка на (аккаунт, задачу) ---
-const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', idle: 'простой' };
+const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', limit: 'лимит откликов', idle: 'простой' };
 const LIVE_TASK_LABEL = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
 
 function fmtAge(ms) {

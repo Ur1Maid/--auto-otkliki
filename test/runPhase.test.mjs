@@ -168,6 +168,11 @@ test('formatPhase: captcha (state) важнее любой фазы', () => {
   assert.equal(formatPhase({ phase: 'collecting', state: 'captcha' }), 'Капча');
 });
 
+test('formatPhase: limit (state) важнее любой фазы → «Лимит откликов» (M14.3)', () => {
+  assert.equal(formatPhase({ phase: 'applying', index: 5, total: 10, state: 'limit' }), 'Лимит откликов');
+  assert.equal(formatPhase({ phase: 'scoring', state: 'limit' }), 'Лимит откликов');
+});
+
 test('formatPhase: неизвестная/пустая фаза → Простаивает', () => {
   assert.equal(formatPhase({ phase: '' }), 'Простаивает');
   assert.equal(formatPhase({ phase: 'review' }), 'Простаивает');

@@ -145,8 +145,9 @@ function positiveInt(value) {
  * Примеры: «Собирает вакансии: 250», «Оценивает 12/40», «Откликается 12/40»,
  * «Ошибка: таймаут», «Капча», «Готово», «Простаивает».
  *
- * Приоритет: капча (state==='captcha') важнее фазы — на капче прогон стоит. Причину ошибки
- * берём из `lastEvent` (туда review.js кладёт литерал classifyErrorReason — без PII/URL).
+ * Приоритет: капча (state==='captcha') и лимит откликов (state==='limit') важнее фазы —
+ * на них прогон стоит. Причину ошибки берём из `lastEvent` (туда review.js кладёт литерал
+ * classifyErrorReason — без PII/URL).
  *
  * @param {object} [snapshot] — { phase, index, total, state, lastEvent }
  *   (совпадает с формой аккаунта из liveStatus.buildLiveView)
@@ -155,6 +156,7 @@ function positiveInt(value) {
 export function formatPhase(snapshot = {}) {
   const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
   if (s.state === 'captcha') return 'Капча';
+  if (s.state === 'limit') return 'Лимит откликов';
 
   const phase = typeof s.phase === 'string' ? s.phase.trim().toLowerCase() : '';
   const index = positiveInt(s.index);

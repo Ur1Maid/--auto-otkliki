@@ -200,7 +200,7 @@ Node.js — пользователь подтвердил: **FastAPI НЕ доб
 - [x] (M13.2) Пейсинг откликов 0.5–3.5 с: `DEFAULT_MIN_DELAY_SEC` 2→0.5, `DEFAULT_MAX_DELAY_SEC` 7→3.5 (review.js:51-52). Убедиться, что `randomDelayMs(minMs,maxMs)` и `parseArgs`-валидация (`--min-delay`/`--max-delay`, review.js:114-122) корректны на дробных секундах (0.5·1000=500 мс); обновить console-строку «Антибот: пауза …с» и любые примеры в README/CLAUDE.md/docs, где фигурирует 2–7. Тест `pacing.js` на дробных границах (min=0.5,max=3.5 → результат в [500,3500] мс). — Acceptance: боевой прогон делает паузу 0.5–3.5 с между откликами; `npm test` зелёный.
 - [x] (M13.3) SSE-эндпоинт `GET /api/stream` в `dashboard.js`: сервер каждые 400 мс проверяет mtime файлов `logs/status/*.json` + `logs/resources.jsonl`; при изменении pushит `data: <json-снимок>\n\n`. Клиент: `new EventSource('/api/stream')` заменяет `setInterval loadLive`; fallback — polling 2 с если SSE недоступен. Слушать только `127.0.0.1` (как остальной сервер). Тест: mock-файл изменяется → событие отправлено. — Acceptance: задержка обновления < 500 мс от записи heartbeat.
 
-## M14 — Метка «лимит откликов достигнут» ▶ ACTIVE
+## M14 — Метка «лимит откликов достигнут» ▶ DONE
 hh.ru блокирует отклики при достижении дневного лимита — показывает баннер/текст на странице
 отклика. Детект → `status='limit_reached'` + heartbeat `state='limit'` → graceful-стоп прогона
 (дальше откликаться бессмысленно) → оранжевый badge «Лимит откликов» в панели «Сейчас».
@@ -210,9 +210,9 @@ hh.ru блокирует отклики при достижении дневно
 
 - [x] (M14.1) `src/lib/limit.js`: `LIMIT_PATTERNS` (русские формулировки дневного лимита hh.ru: «вы откликнулись на максимальное количество вакансий», «лимит откликов исчерпан», «достигли лимита откликов», «сегодня больше нельзя откликаться» — кириллица-safe regex БЕЗ `\b`/`\w`-границ на кириллице, урок M11.6) + `isLimitReached(pageText)` (guard на не-строку, never-throws). Пометить в JSDoc: формулировки нуждаются в живой верификации от пользователя. — Acceptance: `npm test` зелёный; модуль матчит сид-формулировки, не бросает на мусоре. ПОМЕТКА в PROGRESS: live-verify паттернов = follow-up.
 - [x] (M14.2) Детект лимита в `reviewVacancy`: перед/после клика отклика проверить текст страницы через `isLimitReached`; при совпадении → результат `status='limit_reached'`, heartbeat `state='limit'`, цикл прерывается gracefully (`break`, не бросает; finally закрывает браузер). Untrusted текст страницы только `.test()`-матчится, наружу не эхо-ится (prompt-injection-safe). Тест на фикстуре/мок-результате. — Acceptance: `npm test` зелёный; при лимите прогон останавливается, heartbeat несёт `state='limit'`.
-- [ ] (M14.3) UI-badge: `accountLiveness` (liveStatus.js) распознаёт `state='limit'` → новый литерал `LIVENESS_LIMIT='limit'` (приоритет рядом с captcha); `formatPhase` (runPhase.js) → `phaseLabel='Лимит откликов'` при `state==='limit'`; dashboard.js рендерит оранжевый badge (класс `lv-limit`/`st-stop`-стиль). Тесты `formatPhase` + `accountLiveness` на `state='limit'`. — Acceptance: при `state='limit'` панель «Сейчас» показывает метку «Лимит откликов».
+- [x] (M14.3) UI-badge: `accountLiveness` (liveStatus.js) распознаёт `state='limit'` → новый литерал `LIVENESS_LIMIT='limit'` (приоритет рядом с captcha); `formatPhase` (runPhase.js) → `phaseLabel='Лимит откликов'` при `state==='limit'`; dashboard.js рендерит оранжевый badge (класс `lv-limit`/`st-stop`-стиль). Тесты `formatPhase` + `accountLiveness` на `state='limit'`. — Acceptance: при `state='limit'` панель «Сейчас» показывает метку «Лимит откликов».
 
-## M15 — Electron десктоп-приложение
+## M15 — Electron десктоп-приложение ▶ ACTIVE
 Обернуть существующий Node.js сервер в Electron: `BrowserWindow` открывает `http://127.0.0.1:8787`,
 tray-иконка, автозапуск сервера. Бэкенд (`dashboard.js`, `daemon.js`, `review.js`) не меняется.
 Новая зависимость `electron` — только devDependency, не меняет production-поведение CLI.

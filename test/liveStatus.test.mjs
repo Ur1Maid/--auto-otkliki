@@ -6,6 +6,7 @@ import {
   LIVENESS_WORKING,
   LIVENESS_STALLED,
   LIVENESS_CAPTCHA,
+  LIVENESS_LIMIT,
   LIVENESS_IDLE,
 } from '../src/lib/liveStatus.js';
 
@@ -38,6 +39,17 @@ test('accountLiveness: устаревший вне рабочего окна →
 
 test('accountLiveness: state=captcha → captcha (даже если свежий)', () => {
   const hb = { account: 'a', ts: iso(NOW - 1000), state: 'captcha' };
+  assert.equal(accountLiveness(hb, { now: NOW, withinWorkingHours: true }), LIVENESS_CAPTCHA);
+});
+
+test('accountLiveness: state=limit → limit (даже если свежий) (M14.3)', () => {
+  const hb = { account: 'a', ts: iso(NOW - 1000), state: 'limit' };
+  assert.equal(accountLiveness(hb, { now: NOW, withinWorkingHours: true }), LIVENESS_LIMIT);
+});
+
+test('accountLiveness: captcha приоритетнее limit', () => {
+  const hb = { account: 'a', ts: iso(NOW - 1000), state: 'captcha' };
+  // оба «липких» — captcha проверяется первой
   assert.equal(accountLiveness(hb, { now: NOW, withinWorkingHours: true }), LIVENESS_CAPTCHA);
 });
 

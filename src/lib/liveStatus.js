@@ -20,10 +20,12 @@
 import { isStale } from './heartbeat.js';
 import { formatPhase } from './runPhase.js';
 
-/** Литералы индикатора живости (цвета в UI: working=зелёный, stalled=красный, captcha=оранжевый). */
+/** Литералы индикатора живости (цвета в UI: working=зелёный, stalled=красный,
+ * captcha=оранжевый, limit=оранжевый). */
 export const LIVENESS_WORKING = 'working';
 export const LIVENESS_STALLED = 'stalled';
 export const LIVENESS_CAPTCHA = 'captcha';
+export const LIVENESS_LIMIT = 'limit';
 export const LIVENESS_IDLE = 'idle';
 
 /** Сколько последних событий аккаунта отдавать по умолчанию. */
@@ -54,17 +56,18 @@ function finiteOrNull(value) {
 /**
  * Индикатор живости одного аккаунта по его хартбиту.
  *
- * Приоритет: капча > зависание > работа/простой. Капча «липкая» — важнее свежести
- * (на капче прогон стоит, хартбит всё равно перестаёт обновляться). Завершённый прогон
- * (phase==='done') — не «работает», показываем как простой (idle), а не зелёный/красный.
+ * Приоритет: капча > лимит откликов > зависание > работа/простой. Капча и лимит «липкие» —
+ * важнее свежести (на них прогон стоит, хартбит всё равно перестаёт обновляться). Завершённый
+ * прогон (phase==='done') — не «работает», показываем как простой (idle), а не зелёный/красный.
  *
  * @param {object} heartbeat — запись из buildHeartbeat (или прочитанная из файла); null → idle
  * @param {{ now?: Date|number|string, withinWorkingHours?: boolean, thresholdMs?: number }} [opts]
- * @returns {'working'|'stalled'|'captcha'|'idle'}
+ * @returns {'working'|'stalled'|'captcha'|'limit'|'idle'}
  */
 export function accountLiveness(heartbeat, opts = {}) {
   if (!heartbeat || typeof heartbeat !== 'object') return LIVENESS_IDLE;
   if (heartbeat.state === 'captcha') return LIVENESS_CAPTCHA;
+  if (heartbeat.state === 'limit') return LIVENESS_LIMIT;
   if (heartbeat.phase === 'done') return LIVENESS_IDLE;
 
   let stale;
