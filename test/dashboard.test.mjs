@@ -67,6 +67,38 @@ test('createServer: GET /api/live → 200 JSON', async () => {
   }
 });
 
+test('createServer: GET /api/stream → text/event-stream с начальным снимком (M13.3)', async () => {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const ac = new AbortController();
+  const killer = setTimeout(() => ac.abort(), 5000);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/stream`, { signal: ac.signal });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+    // Читаем поток до первого полного SSE-фрейма (data: ...\n\n).
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (!buf.includes('\n\n')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) buf += dec.decode(value, { stream: true });
+    }
+    const frame = buf.split('\n\n')[0];
+    assert.match(frame, /^data: /);
+    const json = JSON.parse(frame.replace(/^data: /, ''));
+    assert.ok('accounts' in json);
+    assert.ok(Array.isArray(json.accounts));
+    await reader.cancel();
+  } finally {
+    clearTimeout(killer);
+    ac.abort();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // --- createServer (smoke: /api/metrics отдаёт валидный JSON) ---
 test('createServer: GET /api/metrics → 200 JSON', async () => {
   const server = createServer();

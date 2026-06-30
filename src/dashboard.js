@@ -16,11 +16,11 @@
  */
 
 import http from 'node:http';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { logsDir, statusDir, accountsConfigDir, getAccountLogPath } from './config.js';
+import { logsDir, statusDir, resourcesLogPath, accountsConfigDir, getAccountLogPath } from './config.js';
 import {
   parseJsonl,
   aggregateResponses,
@@ -33,8 +33,12 @@ import {
 import { createTaskRunner } from './lib/taskRunner.js';
 import { buildLiveView } from './lib/liveStatus.js';
 import { isWithinWorkingHours } from './lib/schedule.js';
+import { buildMtimeSignature, signatureChanged } from './lib/streamWatcher.js';
 
 const DEFAULT_PORT = 8787;
+
+// Период опроса mtime файлов статуса/ресурсов для SSE-стрима «Сейчас» (M13.3).
+const STREAM_POLL_MS = 400;
 
 // Максимальный размер тела POST-запроса (управление). Сервер слушает только loopback,
 // но всё равно ограничиваем — защита от случайного раздувания.
@@ -306,6 +310,90 @@ export async function collectLive() {
   });
 }
 
+/**
+ * Собирает mtime файлов, за которыми следит SSE-стрим (M13.3): хартбиты
+ * logs/status/*.json + замеры logs/resources.jsonl. Отсутствующие/нечитаемые файлы
+ * пропускаются (их исчезновение/появление само меняет сигнатуру). Никогда не бросает.
+ *
+ * @returns {Promise<Array<{name: string, mtimeMs: number}>>}
+ */
+async function collectStreamMtimes() {
+  const entries = [];
+  let statusFiles = [];
+  try {
+    statusFiles = await readdir(statusDir);
+  } catch {
+    statusFiles = [];
+  }
+  for (const f of statusFiles.filter((x) => /\.json$/.test(x))) {
+    try {
+      const st = await stat(path.join(statusDir, f));
+      entries.push({ name: `status/${f}`, mtimeMs: st.mtimeMs });
+    } catch {
+      // файл исчез между readdir и stat — пропускаем
+    }
+  }
+  try {
+    const st = await stat(resourcesLogPath);
+    entries.push({ name: 'resources.jsonl', mtimeMs: st.mtimeMs });
+  } catch {
+    // нет файла ресурсов (демон не запущен) — пропускаем
+  }
+  return entries;
+}
+
+/**
+ * Обслуживает SSE-стрим GET /api/stream (M13.3): держит соединение, каждые ~400 мс
+ * сверяет mtime статус/ресурс-файлов и при изменении пушит свежий снимок «Сейчас»
+ * (тот же, что отдаёт /api/live). Только числа/статусы — без PII (санитизация в liveStatus).
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ */
+function handleStream(req, res) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+  });
+
+  let closed = false;
+  let busy = false;
+  let lastSig = null;
+
+  const tick = async (force) => {
+    if (closed || busy) return; // не наслаиваем тики, если чтение/collectLive затянулось
+    busy = true;
+    try {
+      const sig = buildMtimeSignature(await collectStreamMtimes());
+      if (force || signatureChanged(lastSig, sig)) {
+        lastSig = sig;
+        const data = await collectLive();
+        if (!closed) res.write(`data: ${JSON.stringify(data)}\n\n`);
+      }
+    } catch {
+      // best-effort — сбой чтения не роняет стрим (следующий тик повторит)
+    } finally {
+      busy = false;
+    }
+  };
+
+  // Первый снимок — сразу после подключения.
+  tick(true);
+  const timer = setInterval(() => tick(false), STREAM_POLL_MS);
+  if (typeof timer.unref === 'function') timer.unref(); // не держим event loop
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(timer);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+}
+
 // HTML страницы (Chart.js по CDN). Данные тянутся с /api/metrics.
 const PAGE = `<!doctype html>
 <html lang="ru">
@@ -383,7 +471,7 @@ const PAGE = `<!doctype html>
   </div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Сейчас</h2>
-    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Автообновление 5 с.</div>
+    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Живое обновление (SSE, &lt; 0,5 с).</div>
     <div id="liveRes" class="muted" style="margin-bottom: 10px"></div>
     <div id="liveBody" class="muted">Загрузка…</div>
   </div>
@@ -614,7 +702,11 @@ async function loadLive() {
   let v;
   try { v = await (await fetch('/api/live')).json(); }
   catch (e) { document.getElementById('liveBody').innerHTML = '<div class="err">Ошибка загрузки</div>'; return; }
+  renderLive(v);
+}
 
+function renderLive(v) {
+  if (!v) return;
   // Ресурсы + токены/стоимость за сегодня (из последнего снимка метрик).
   const r = v.resources && v.resources.latest;
   const resTxt = r
@@ -654,6 +746,31 @@ async function loadLive() {
   }).join('');
 }
 
+// Живое обновление блока «Сейчас» через SSE (M13.3): сервер пушит снимок при
+// изменении файлов статуса/ресурсов (задержка < 500 мс). Если EventSource недоступен
+// или соединение окончательно закрылось — откат на polling каждые 2 с.
+function startLiveStream() {
+  let polling = false;
+  function fallbackToPolling() {
+    if (polling) return;
+    polling = true;
+    loadLive();
+    setInterval(loadLive, 2000);
+  }
+  if (typeof EventSource === 'undefined') { fallbackToPolling(); return; }
+  let es;
+  try { es = new EventSource('/api/stream'); }
+  catch (e) { fallbackToPolling(); return; }
+  es.onmessage = (ev) => {
+    try { renderLive(JSON.parse(ev.data)); } catch (e) { /* битый фрейм — ждём следующий */ }
+  };
+  es.onerror = () => {
+    // CLOSED (readyState 2) — соединение не восстановится: уходим в polling.
+    // CONNECTING — EventSource сам переподключится, ничего не делаем.
+    if (es.readyState === 2) fallbackToPolling();
+  };
+}
+
 // Раскрытие «Истории» — дорисовать графики из уже загруженного снимка (или дотянуть).
 const historyBlock = document.getElementById('historyBlock');
 if (historyBlock) historyBlock.addEventListener('toggle', () => {
@@ -662,9 +779,8 @@ if (historyBlock) historyBlock.addEventListener('toggle', () => {
 
 load();
 loadControl();
-loadLive();
 setInterval(loadControl, 1000);
-setInterval(loadLive, 1000);
+startLiveStream();
 </script>
 </body>
 </html>`;
@@ -758,6 +874,11 @@ export function createServer(deps = {}) {
         const data = await collectLive();
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(data));
+        return;
+      }
+      // SSE-стрим «Сейчас» (M13.3): read-only, как /api/live — без loopback-гарда.
+      if (req.url === '/api/stream') {
+        handleStream(req, res);
         return;
       }
       if (req.url === '/' || req.url === '/index.html') {
