@@ -60,6 +60,11 @@ const DEFAULT_MAX_DELAY_SEC = 3.5;
 const COLLECT_VACANCIES_TIMEOUT_MS = 180000;
 // Уникальный сентинел таймаута сбора — отличим от любого валидного результата collect.
 const COLLECT_TIMEOUT = Symbol('collect-timeout');
+// Под-лимит на ОДНУ страницу выдачи (M18.4): навигация+чтение одной страницы пагинации
+// не должны висеть и съедать весь бюджет COLLECT_VACANCIES_TIMEOUT_MS. При превышении —
+// прекращаем сбор с уже накопленным частичным пулом (не роняем шаг, не «таймаутим» всё).
+const COLLECT_PAGE_TIMEOUT_MS = 30000;
+const COLLECT_PAGE_TIMEOUT = Symbol('collect-page-timeout');
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
@@ -245,6 +250,38 @@ async function loadKnowledgeBase(directory) {
   return chunks;
 }
 
+// Навигация + чтение одной страницы выдачи (M18.4). Вынесено для пер-страничного
+// таймаут-гарда: зависшая навигация/чтение одной страницы не должны блокировать весь сбор.
+// Все шаги best-effort — единичный сбой страницы возвращает пустой список (сбор продолжится
+// или завершится с частичным пулом), не роняет collectFromSearch.
+async function loadSearchPage(page, nextUrl) {
+  await page.goto(nextUrl.toString(), { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await dismissHarmlessPopups(page);
+  await page.waitForTimeout(900);
+
+  // Карточки выдачи: URL + флаг удалёнки (метка hh.ru).
+  const cards = await page.$$eval('[data-qa="vacancy-serp__vacancy"]', (nodes) =>
+    nodes.map((card) => {
+      const remote = !!card.querySelector('[data-qa="vacancy-label-work-schedule-remote"]');
+      const title = card.querySelector('a[data-qa="serp-item__title"]');
+      let url = title ? title.href : '';
+      if (!/\/vacancy\/\d+/.test(url)) {
+        const alt = card.querySelector('a[href*="/vacancy/"]');
+        if (alt) url = alt.href;
+      }
+      return { url, remote };
+    })
+  ).catch(() => []);
+
+  // Подстраховка: любые /vacancy/-ссылки вне карточек (не теряем вакансии),
+  // признак удалёнки неизвестен → remote:false (уйдут в хвост приоритета).
+  const flat = await page.$$eval('a[href*="/vacancy/"]', (links) =>
+    links.map((link) => link.href).filter((href) => /\/vacancy\/\d+/.test(new URL(href).pathname))
+  ).catch(() => []);
+
+  return [...cards, ...flat.map((url) => ({ url, remote: false }))];
+}
+
 async function collectFromSearch(page, searchUrl, limit) {
   const seen = new Set();   // канонические URL, уже собранные (дедуп во время сбора)
   const items = [];         // сырые карточки { url, remote } в DOM-порядке
@@ -258,31 +295,17 @@ async function collectFromSearch(page, searchUrl, limit) {
     nextUrl.searchParams.set('page', String(pageIndex));
     const beforePage = seen.size;
 
-    await page.goto(nextUrl.toString(), { waitUntil: 'domcontentloaded' });
-    await dismissHarmlessPopups(page);
-    await page.waitForTimeout(900);
-
-    // Карточки выдачи: URL + флаг удалёнки (метка hh.ru).
-    const cards = await page.$$eval('[data-qa="vacancy-serp__vacancy"]', (nodes) =>
-      nodes.map((card) => {
-        const remote = !!card.querySelector('[data-qa="vacancy-label-work-schedule-remote"]');
-        const title = card.querySelector('a[data-qa="serp-item__title"]');
-        let url = title ? title.href : '';
-        if (!/\/vacancy\/\d+/.test(url)) {
-          const alt = card.querySelector('a[href*="/vacancy/"]');
-          if (alt) url = alt.href;
-        }
-        return { url, remote };
-      })
-    ).catch(() => []);
-
-    // Подстраховка: любые /vacancy/-ссылки вне карточек (не теряем вакансии),
-    // признак удалёнки неизвестен → remote:false (уйдут в хвост приоритета).
-    const flat = await page.$$eval('a[href*="/vacancy/"]', (links) =>
-      links.map((link) => link.href).filter((href) => /\/vacancy\/\d+/.test(new URL(href).pathname))
-    ).catch(() => []);
-
-    const pageItems = [...cards, ...flat.map((url) => ({ url, remote: false }))];
+    // Пер-страничный таймаут-гард (M18.4): одна зависшая страница не должна съедать весь
+    // бюджет сбора — при превышении прекращаем с уже накопленным частичным пулом.
+    const pageItems = await withTimeout(
+      loadSearchPage(page, nextUrl),
+      COLLECT_PAGE_TIMEOUT_MS,
+      COLLECT_PAGE_TIMEOUT,
+    );
+    if (pageItems === COLLECT_PAGE_TIMEOUT) {
+      console.log(`Страница ${pageIndex + 1} выдачи зависла (>${Math.round(COLLECT_PAGE_TIMEOUT_MS / 1000)}с) — прекращаю сбор, возвращаю собранное (${seen.size}).`);
+      break;
+    }
 
     for (const item of pageItems) {
       if (seen.size >= limit) break;
