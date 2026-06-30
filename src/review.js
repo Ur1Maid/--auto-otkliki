@@ -37,6 +37,7 @@ import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTO
 import { createRunSummary } from './lib/runSummary.js';
 import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
+import { RUN_PHASES, classifyErrorReason } from './lib/runPhase.js';
 
 
 const DEFAULT_LIMIT = 200;
@@ -1518,10 +1519,12 @@ async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
 
-async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '', remoteFromCard = false } = {}) {
+async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '', remoteFromCard = false, onPhase = () => {} } = {}) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(700);
+  // Фаза «оценивает»: панель «Сейчас» показывает скоринг i/total (M12.1).
+  await onPhase(RUN_PHASES.SCORING);
 
   const title = await page.locator('h1').first().innerText({ timeout: 3000 }).catch(() => 'Без заголовка');
   const vacancyText = await getVacancyText(page);
@@ -1594,6 +1597,9 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
   if (await pageLooksLikeManualStep(page)) {
     console.log('На странице уже видны признаки анкеты/теста/обязательных вопросов.');
   }
+
+  // Фаза «откликается»: прошли порог и dry-run-гард, начинаем реальный отклик (M12.1).
+  await onPhase(RUN_PHASES.APPLYING);
 
   const responseButton = await findResponseButton(page);
   if (!responseButton) {
@@ -1722,6 +1728,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
   const summary = createRunSummary();
 
   try {
+    // Хартбит сбора: панель «Сейчас» видит «собирает вакансии» ещё до появления пула (M12.1).
+    await writeHeartbeatFile(account, {
+      task: 'apply',
+      phase: RUN_PHASES.COLLECTING,
+      index: 0,
+      total: null,
+      lastEvent: 'collecting',
+      state: 'ok',
+      ts: new Date(),
+    });
     const { urls: vacancies, remoteSet } = await collectVacanciesForAccount(page, args, account);
 
     if (vacancies.length === 0) {
@@ -1735,18 +1751,34 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     }
 
     let remoteApplied = 0;
-    // Хартбит старта: панель управления (M11) видит, что прогон начался (index 0).
+    // Хартбит старта: пул собран, панель видит готовность к скорингу (index 0).
     await writeHeartbeatFile(account, {
       task: 'apply',
-      phase: 'review',
+      phase: RUN_PHASES.SCORING,
       index: 0,
       total: vacancies.length,
-      lastEvent: 'starting',
+      lastEvent: 'collected',
       state: 'ok',
       ts: new Date(),
     });
     for (let index = 0; index < vacancies.length; index += 1) {
       const url = vacancies[index];
+
+      // Текущая фаза обработки этой вакансии: reviewVacancy через onPhase двигает её
+      // scoring → applying; пост-итерационный хартбит фиксирует достигнутую фазу (M12.1).
+      let currentPhase = RUN_PHASES.SCORING;
+      const onPhase = (phase) => {
+        currentPhase = phase;
+        return writeHeartbeatFile(account, {
+          task: 'apply',
+          phase,
+          index: index + 1,
+          total: vacancies.length,
+          lastEvent: phase,
+          state: 'ok',
+          ts: new Date(),
+        });
+      };
 
       try {
         const result = await reviewVacancy(page, url, index + 1, vacancies.length, {
@@ -1759,14 +1791,15 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           resumeHash,
           // Канонизируем url: пул из поиска уже канонический, но файловые URL
           // нормализуются иначе (normalizeHhUrl, с query) — приводим к канону.
-          remoteFromCard: remoteSet.has(normalizeVacancyUrl(url) || url)
+          remoteFromCard: remoteSet.has(normalizeVacancyUrl(url) || url),
+          onPhase
         });
         summary.record(result);
         await appendLog({ url, ...result }, account);
-        // Хартбит прогресса: index/total + статус последней вакансии (только метка-статус, без PII).
+        // Хартбит прогресса: достигнутая фаза + статус последней вакансии (только метка, без PII).
         await writeHeartbeatFile(account, {
           task: 'apply',
-          phase: 'review',
+          phase: currentPhase,
           index: index + 1,
           total: vacancies.length,
           lastEvent: result.status,
@@ -1791,13 +1824,14 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         console.error(`[${account}] Ошибка на ${url}: ${error.message}`);
         summary.record({ status: 'error' });
         await appendLog({ url, status: 'error', error: error.message }, account);
-        // Хартбит ошибки: фиксируем метку-статус (без текста ошибки/PII), прогон продолжается.
+        // Хартбит ошибки: фаза error + короткая ПРИЧИНА-литерал (classifyErrorReason —
+        // без текста ошибки/URL/PII), прогон продолжается со следующей вакансии (M12.1).
         await writeHeartbeatFile(account, {
           task: 'apply',
-          phase: 'review',
+          phase: RUN_PHASES.ERROR,
           index: index + 1,
           total: vacancies.length,
-          lastEvent: 'error',
+          lastEvent: classifyErrorReason(error),
           state: 'ok',
           ts: new Date(),
         });
@@ -1841,7 +1875,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     // Финальный хартбит: прогон аккаунта завершён (панель показывает «готово», не «завис»).
     await writeHeartbeatFile(account, {
       task: 'apply',
-      phase: 'done',
+      phase: RUN_PHASES.DONE,
       total: vacancies.length,
       lastEvent: 'finished',
       state: 'ok',
