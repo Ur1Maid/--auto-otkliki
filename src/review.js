@@ -32,6 +32,7 @@ import { localRelevanceScore, needsModelScoring } from './lib/localScore.js';
 import { cacheKey, getCached, hashResume, loadCache, saveCache, setCached } from './lib/scoreCache.js';
 import { coverLetterRequired } from './lib/coverLetter.js';
 import { isAlreadyApplied } from './lib/applied.js';
+import { isLimitReached } from './lib/limit.js';
 import { isSubmitAllowed } from './lib/applyGuard.js';
 import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTON_TEXTS } from './lib/selectors.js';
 import { createRunSummary } from './lib/runSummary.js';
@@ -1515,6 +1516,14 @@ async function pageLooksLikeManualStep(page) {
   return matchesAnyPattern(visibleText, REQUIRED_MANUAL_PATTERNS);
 }
 
+// M14.2: дневной лимит откликов hh.ru. Текст страницы — untrusted (prompt-injection вектор):
+// здесь он лишь .test()-матчится против LIMIT_PATTERNS и НИКОГДА не возвращается наружу/не
+// логируется — только булев флаг (см. limit.js, playwright.md «state detection by text»).
+async function pageLooksLimitReached(page) {
+  const visibleText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+  return isLimitReached(visibleText);
+}
+
 async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
@@ -1603,6 +1612,12 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
 
   const responseButton = await findResponseButton(page);
   if (!responseButton) {
+    // Перед кликом: при дневном лимите hh.ru заменяет кнопку отклика баннером лимита —
+    // отличаем «лимит достигнут» (graceful-стоп прогона) от обычного «кнопка не найдена».
+    if (await pageLooksLimitReached(page)) {
+      console.log(`[${account}] hh.ru сообщает о дневном лимите откликов — останавливаю прогон.`);
+      return { status: 'limit_reached', title, scoredBy };
+    }
     console.log('Кнопка отклика не найдена.');
     return { status: 'manual_needed', title };
   }
@@ -1624,6 +1639,12 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     return { status: 'manual_needed', title, scoredBy };
   }
   await page.waitForTimeout(1200);
+
+  // После клика: hh.ru может показать баннер дневного лимита вместо формы отклика.
+  if (await pageLooksLimitReached(page)) {
+    console.log(`[${account}] hh.ru сообщает о дневном лимите откликов — останавливаю прогон.`);
+    return { status: 'limit_reached', title, scoredBy };
+  }
 
   const flowResult = await completeApplicationFlow(page, deepSeekContext, { title, url, text: vacancyText }, { dryRun });
   if (flowResult.status === 'manual_needed') return { status: 'manual_needed', title, scoredBy };
@@ -1796,6 +1817,23 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         });
         summary.record(result);
         await appendLog({ url, ...result }, account);
+
+        // M14.2: дневной лимит откликов hh.ru достигнут — дальше откликаться бессмысленно.
+        // Хартбит несёт state='limit' (UI-badge «Лимит откликов» проводится в M14.3),
+        // прогон gracefully останавливается (break, не throw; finally ниже закрывает браузер).
+        if (result.status === 'limit_reached') {
+          await writeHeartbeatFile(account, {
+            task: 'apply',
+            phase: currentPhase,
+            index: index + 1,
+            total: vacancies.length,
+            lastEvent: 'limit_reached',
+            state: 'limit',
+            ts: new Date(),
+          });
+          break;
+        }
+
         // Хартбит прогресса: достигнутая фаза + статус последней вакансии (только метка, без PII).
         await writeHeartbeatFile(account, {
           task: 'apply',

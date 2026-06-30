@@ -70,3 +70,32 @@ test('isLimitReached: число → false', () => {
 test('isLimitReached: объект → false', () => {
   assert.equal(isLimitReached({ text: 'лимит откликов исчерпан' }), false);
 });
+
+// --- isLimitReached: фикстуры «полного текста страницы» (M14.2, pageLooksLimitReached) ---
+// reviewVacancy читает body.innerText целиком; баннер лимита тонет в остальном тексте страницы.
+
+const LIMIT_PAGE_FIXTURE = [
+  'hh.ru',
+  'Senior DevOps Engineer',
+  'Москва · от 250 000 ₽ · полный день',
+  'К сожалению, вы откликнулись на максимальное количество вакансий сегодня.',
+  'Попробуйте завтра.',
+  'Похожие вакансии',
+].join('\n');
+
+const NORMAL_PAGE_FIXTURE = [
+  'hh.ru',
+  'Senior DevOps Engineer',
+  'Москва · от 250 000 ₽ · полный день',
+  'Обязанности: поддержка инфраструктуры, CI/CD, Kubernetes, Docker.',
+  'Требования: опыт от 3 лет, Linux, Terraform.',
+  'Откликнуться',
+].join('\n');
+
+test('isLimitReached: баннер лимита в полном тексте страницы → true', () => {
+  assert.equal(isLimitReached(LIMIT_PAGE_FIXTURE), true);
+});
+
+test('isLimitReached: обычная страница вакансии (с кнопкой «Откликнуться») → false', () => {
+  assert.equal(isLimitReached(NORMAL_PAGE_FIXTURE), false);
+});
