@@ -1,22 +1,23 @@
-// src/lib/taskRunner.js — реестр запущенных задач панели управления (M11.8).
+// src/lib/taskRunner.js — реестр запущенных задач панели управления (M11.8, обновлён M12.5).
 //
 // Тонкая управляющая обёртка над чистым taskControl.js (buildTaskCommand/canStart):
 // спавнит `node src/daemon.js --task … --account … [--live]`, трекает дочерний процесс
-// по аккаунту, останавливает его kill-ом. Spawn/kill инъектируются — тесты не трогают
+// по паре (account, task), останавливает его kill-ом. Spawn/kill инъектируются — тесты не трогают
 // реальный process (см. .claude/rules/testing.md).
 //
-// БЕЗОПАСНОСТЬ (инвариант M11):
+// БЕЗОПАСНОСТЬ (инвариант M12.5):
 //   - dry-run по умолчанию: '--live' добавляется ТОЛЬКО при live === true (через buildTaskCommand).
 //   - argv передаётся МАССИВОМ в spawn (без shell) — untrusted text/area не становятся
 //     shell-командой.
-//   - одна задача на аккаунт одновременно (canStart) — повторный старт отклоняется (409).
+//   - одна задача данного ТИПА на аккаунт (account+task); apply+messages+resume могут идти
+//     параллельно (M12.5) — повторная пара отклоняется (409).
 //   - в лог/ответ идут только account/task/pid — ни ключа, ни PII, ни текста писем.
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import path from 'node:path';
 
 import { rootDir } from '../config.js';
-import { buildTaskCommand, canStart } from './taskControl.js';
+import { buildTaskCommand, canStart, normalizeTask } from './taskControl.js';
 
 const DAEMON_JS = path.join(rootDir, 'src', 'daemon.js');
 
@@ -39,7 +40,10 @@ export function createTaskRunner(deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
   const log = typeof deps.log === 'function' ? deps.log : () => {};
 
-  // account → { account, task, live, pid, startedAt, child }
+  // Составной ключ реестра: "account\0task" — NUL-разделитель исключает коллизии имён.
+  const keyOf = (account, task) => `${account}\0${task}`;
+
+  // (account\0task) → { account, task, live, pid, startedAt, child }
   const running = new Map();
 
   /** Текущие задачи в форме, понятной canStart. */
@@ -80,9 +84,9 @@ export function createTaskRunner(deps = {}) {
     const account = argv[3];
     const live = opts.live === true;
 
-    // 2. Инвариант: одна задача на аккаунт. Дубль → 409.
+    // 2. Инвариант: одна задача данного типа на аккаунт. Та же пара → 409.
     if (!canStart(runningEntries(), account, task)) {
-      return { ok: false, status: 409, account, task, reason: 'Аккаунт уже занят другой задачей' };
+      return { ok: false, status: 409, account, task, reason: 'Эта задача для аккаунта уже запущена' };
     }
 
     // 3. Спавн дочернего процесса. argv — массивом, без shell.
@@ -95,11 +99,11 @@ export function createTaskRunner(deps = {}) {
 
     const pid = child && typeof child.pid === 'number' ? child.pid : null;
     const entry = { account, task, live, pid, startedAt: now(), child };
-    running.set(account, entry);
+    running.set(keyOf(account, task), entry);
 
-    // Снимаем запись из реестра, когда процесс завершится (чтобы аккаунт освободился).
+    // Снимаем запись из реестра, когда процесс завершится (чтобы пара account+task освободилась).
     const cleanup = () => {
-      if (running.get(account) === entry) running.delete(account);
+      if (running.get(keyOf(account, task)) === entry) running.delete(keyOf(account, task));
     };
     if (child && typeof child.on === 'function') {
       child.on('exit', cleanup);
@@ -115,31 +119,67 @@ export function createTaskRunner(deps = {}) {
   }
 
   /**
-   * Останавливает задачу аккаунта: kill трекаемого процесса.
+   * Останавливает задачу(-и) аккаунта: kill трекаемого процесса.
    * ЗАМЕЧАНИЕ: для --task apply daemon спавнит review.js внуком — kill родителя на Windows
    * не валит всё дерево; apply — разовый батч, это приемлемо в рамках M11.8.
    *
-   * @param {{account: string}} opts
-   * @returns {{ok: boolean, status: number, account?: string, task?: string, reason?: string}}
+   * opts.task (опционально): если указан — нормализуется через normalizeTask (алиасы
+   *   разрешаются: poll→messages, bump/micro-edit→resume). Неизвестное значение → 400.
+   *   Если не указан — останавливает ВСЕ задачи аккаунта.
+   *
+   * Возвращает:
+   *   ровно одна задача → { ok, status:200, account, task }   (обратная совместимость).
+   *   несколько задач   → { ok, status:200, account, stopped: string[] }.
+   *
+   * @param {{account: string, task?: string}} opts
+   * @returns {{ok: boolean, status: number, account?: string, task?: string,
+   *            stopped?: string[], reason?: string}}
    */
   function stop(opts = {}) {
     const account = typeof opts.account === 'string' ? opts.account.trim() : '';
     if (!account) return { ok: false, status: 400, reason: 'Параметр account обязателен' };
 
-    const entry = running.get(account);
-    if (!entry) return { ok: false, status: 404, account, reason: 'Нет запущенной задачи для аккаунта' };
-
-    try {
-      if (entry.child && typeof entry.child.kill === 'function') {
-        entry.child.kill('SIGTERM');
+    // Фильтр по task (опциональный): нормализуем через normalizeTask — алиасы разрешаются,
+    // неизвестное значение возвращает null → 400. Если opts.task не указан — wantTask=null,
+    // останавливаем все задачи аккаунта.
+    let wantTask = null;
+    if (typeof opts.task === 'string' && opts.task.trim()) {
+      const rawTask = opts.task.trim();
+      wantTask = normalizeTask(rawTask);
+      if (wantTask === null) {
+        return { ok: false, status: 400, account, reason: 'Неизвестная задача: ' + rawTask };
       }
-    } catch {
-      // best-effort: процесс мог уже завершиться.
     }
-    running.delete(account);
 
-    log(`[control] Остановлено оператором: ${entry.task}/${account}`);
-    return { ok: true, status: 200, account, task: entry.task };
+    // Собираем все совпадающие записи.
+    const matches = [];
+    for (const e of running.values()) {
+      if (e.account !== account) continue;
+      if (wantTask !== null && e.task !== wantTask) continue;
+      matches.push(e);
+    }
+
+    if (matches.length === 0) {
+      return { ok: false, status: 404, account, reason: 'Нет запущенной задачи для аккаунта' };
+    }
+
+    for (const entry of matches) {
+      try {
+        if (entry.child && typeof entry.child.kill === 'function') {
+          entry.child.kill('SIGTERM');
+        }
+      } catch {
+        // best-effort: процесс мог уже завершиться.
+      }
+      running.delete(keyOf(entry.account, entry.task));
+      log(`[control] Остановлено оператором: ${entry.task}/${entry.account}`);
+    }
+
+    // Обратная совместимость: одна задача → task-поле; несколько → stopped-массив.
+    if (matches.length === 1) {
+      return { ok: true, status: 200, account, task: matches[0].task };
+    }
+    return { ok: true, status: 200, account, stopped: matches.map((e) => e.task) };
   }
 
   return { start, stop, list };

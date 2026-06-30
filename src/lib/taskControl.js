@@ -1,11 +1,12 @@
-// Чистый модуль управления задачами демона hh-auto-otkliki (M11.7).
+// Чистый модуль управления задачами демона hh-auto-otkliki (M11.7, обновлён M12.5).
 // Без IO, сети, Date.now() — только сборка argv и проверка занятости аккаунта.
 //
 // Безопасные дефолты:
 //   live: false — live-режим требует явного live:true (opt-in).
 //
 // buildTaskCommand(opts) → string[]   — argv для node src/daemon.js
-// canStart(runningTasks, account, task) → boolean — одна задача на аккаунт
+// canStart(runningTasks, account, task) → boolean — одна задача данного ТИПА на аккаунт;
+//   разные задачи на одном аккаунте разрешены (M12.5)
 
 const ALLOWED_TASKS = ['apply', 'messages', 'resume'];
 
@@ -18,7 +19,7 @@ const ALLOWED_TASKS = ['apply', 'messages', 'resume'];
  * @param {string} raw
  * @returns {string|null}
  */
-function normalizeTask(raw) {
+export function normalizeTask(raw) {
   if (typeof raw !== 'string') return null;
   const t = raw.trim().toLowerCase();
   if (t === 'poll') return 'messages';
@@ -104,8 +105,11 @@ export function buildTaskCommand({ task, account, live = false, limit, text, are
 /**
  * Проверяет, можно ли запустить задачу для аккаунта.
  *
- * Инвариант M11: одна задача на аккаунт одновременно.
- * Возвращает false если аккаунт уже занят (любой задачей), task неизвестен,
+ * Инвариант M12.5: одна задача данного ТИПА на аккаунт одновременно;
+ * разные задачи на одном аккаунте разрешены (apply+messages+resume могут идти параллельно).
+ * (Ранее M11: одна задача на аккаунт — изменено в M12.5.)
+ *
+ * Возвращает false если пара (account, task) уже запущена, task неизвестен,
  * или account невалиден.
  *
  * @param {Array<{account: string, task: string}>} runningTasks — текущие задачи.
@@ -125,14 +129,18 @@ export function canStart(runningTasks, account, task) {
   // Защита: runningTasks должен быть массивом.
   const tasks = Array.isArray(runningTasks) ? runningTasks : [];
 
-  // Проверяем, занят ли аккаунт (любой задачей, case-sensitive).
+  // Проверяем, занята ли конкретная пара (account, task) — case-sensitive для account.
   for (const entry of tasks) {
     // Пропускаем некорректные записи.
     if (entry == null || typeof entry !== 'object') continue;
     if (typeof entry.account !== 'string' || !entry.account) continue;
 
-    if (entry.account === trimmedAccount) {
-      // Аккаунт уже занят — запуск невозможен.
+    // Пропускаем записи с ненормализуемым task.
+    const entryTask = normalizeTask(entry.task == null ? '' : String(entry.task));
+    if (entryTask === null) continue;
+
+    if (entry.account === trimmedAccount && entryTask === normalizedTask) {
+      // Эта пара (аккаунт, задача) уже запущена — запуск невозможен.
       return false;
     }
   }

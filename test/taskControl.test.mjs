@@ -278,9 +278,9 @@ test('canStart: аккаунт занят той же задачей → false',
   assert.equal(canStart(running, 'myacc', 'apply'), false);
 });
 
-test('canStart: аккаунт занят другой задачей → false (один аккаунт = одна задача)', () => {
+test('canStart: аккаунт занят другой задачей → true (разные задачи на одном аккаунте разрешены, M12.5)', () => {
   const running = [{ account: 'myacc', task: 'messages' }];
-  assert.equal(canStart(running, 'myacc', 'apply'), false);
+  assert.equal(canStart(running, 'myacc', 'apply'), true);
 });
 
 test('canStart: другой аккаунт занят → true (наш свободен)', () => {
@@ -296,12 +296,12 @@ test('canStart: несколько задач, наш аккаунт не зан
   assert.equal(canStart(running, 'acc3', 'resume'), true);
 });
 
-test('canStart: несколько задач, наш аккаунт занят → false', () => {
+test('canStart: несколько задач, наш аккаунт занят другой задачей → true (разные задачи разрешены, M12.5)', () => {
   const running = [
     { account: 'acc1', task: 'apply' },
     { account: 'acc2', task: 'messages' },
   ];
-  assert.equal(canStart(running, 'acc2', 'resume'), false);
+  assert.equal(canStart(running, 'acc2', 'resume'), true);
 });
 
 // ============================================================
@@ -373,12 +373,32 @@ test('canStart: runningTasks с некорректными записями → 
   assert.equal(canStart(running, 'myacc', 'apply'), true, 'некорректные записи пропускаются');
 });
 
-test('canStart: runningTasks с некорректными и корректными записями — корректная занята → false', () => {
-  const running = [null, { task: 'apply' }, { account: 'myacc', task: 'resume' }];
+test('canStart: runningTasks с некорректными и корректными записями — корректная та же пара → false', () => {
+  // Запись с той же парой (myacc, apply) → false; malformed записи пропускаются.
+  const running = [null, { task: 'apply' }, { account: 'myacc', task: 'apply' }];
   assert.equal(canStart(running, 'myacc', 'apply'), false);
 });
 
 test('canStart: совпадение account case-sensitive (myacc vs MyAcc → разные)', () => {
   const running = [{ account: 'MyAcc', task: 'apply' }];
   assert.equal(canStart(running, 'myacc', 'apply'), true, 'сравнение аккаунтов case-sensitive');
+});
+
+// ============================================================
+// canStart — M12.5: пара (account, task)
+// ============================================================
+
+test('canStart: та же пара (account, task) → false', () => {
+  const running = [{ account: 'myacc', task: 'apply' }];
+  assert.equal(canStart(running, 'myacc', 'apply'), false);
+});
+
+test('canStart: тот же аккаунт, другая задача → true (M12.5)', () => {
+  const running = [{ account: 'myacc', task: 'apply' }];
+  assert.equal(canStart(running, 'myacc', 'messages'), true);
+});
+
+test('canStart: алиасное совпадение → false (running messages, want poll → оба нормализуются в messages)', () => {
+  const running = [{ account: 'myacc', task: 'messages' }];
+  assert.equal(canStart(running, 'myacc', 'poll'), false);
 });
