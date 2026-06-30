@@ -20,7 +20,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { logsDir } from './config.js';
+import { logsDir, accountsConfigDir } from './config.js';
 import {
   parseJsonl,
   aggregateResponses,
@@ -132,6 +132,32 @@ export function parsePort(argv) {
 /** Читает файл или '' (best-effort). */
 async function readOptional(filePath) {
   return readFile(filePath, 'utf8').catch(() => '');
+}
+
+/**
+ * Список аккаунтов из config/accounts/ (имена директорий) для блока «Управление».
+ * Best-effort — никогда не бросает. Исключает шаблон 'example' и скрытые папки.
+ * Имена аккаунтов — операторские метки (не ключ/PII; те же имена уже видны в
+ * /api/metrics byAccount), отдавать их в локальную панель безопасно.
+ *
+ * @param {{ readdirFn?: Function, dir?: string }} [deps] — инъекция для тестов.
+ * @returns {Promise<string[]>} отсортированный список имён аккаунтов.
+ */
+export async function listAccounts(deps = {}) {
+  const readdirFn = typeof deps.readdirFn === 'function' ? deps.readdirFn : readdir;
+  const dir = typeof deps.dir === 'string' && deps.dir ? deps.dir : accountsConfigDir;
+  let entries = [];
+  try {
+    entries = await readdirFn(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((e) => e && typeof e.isDirectory === 'function' && e.isDirectory())
+    .map((e) => e.name)
+    .filter((name) => typeof name === 'string' && name && name !== 'example' && !name.startsWith('.'))
+    .sort();
 }
 
 /**
@@ -257,12 +283,28 @@ const PAGE = `<!doctype html>
   .alert .msg { flex: 1; color: #c8ccd4; }
   .alert .when { color: #8a8f98; white-space: nowrap; }
   button { background: #242832; color: #e6e6e6; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .ctl-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
+  .ctl-row:last-child { border-bottom: none; }
+  .ctl-acc { font-weight: 600; min-width: 120px; }
+  .ctl-live { font-size: 12px; color: #ffb454; display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+  .ctl-btns { display: flex; gap: 6px; }
+  .ctl-stop { border-color: #5a1f1f; }
+  .ctl-status { margin-left: auto; font-size: 12px; }
+  .st-run { color: #7bd88f; }
+  .st-stop { color: #ffb454; }
+  .st-idle { color: #8a8f98; }
 </style>
 </head>
 <body>
   <h1>hh-auto-otkliki — панель метрик</h1>
   <div class="sub">Локально, только чтение логов. <span id="gen"></span> <button onclick="load()">Обновить</button></div>
   <div class="cards" id="cards"></div>
+  <div class="panel" style="margin-bottom: 24px">
+    <h2>Управление задачами</h2>
+    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме. Дефолт — <b>dry-run</b> (без действий наружу); тумблер Live включает реальные действия (требует подтверждения). Одна задача на аккаунт.</div>
+    <div id="controlBody" class="muted">Загрузка…</div>
+  </div>
   <div class="grid">
     <div class="panel"><h2>Отклики по дням</h2><canvas id="byDay"></canvas></div>
     <div class="panel"><h2>Отклики по статусу</h2><canvas id="byStatus"></canvas></div>
@@ -341,7 +383,107 @@ async function load() {
   ] }, options: { plugins: { legend: { labels: { color: '#c8ccd4' } } }, scales: scaleOpts() } });
 }
 function scaleOpts() { return { x: { ticks: { color: '#8a8f98' }, grid: { color: '#242832' } }, y: { ticks: { color: '#8a8f98' }, grid: { color: '#242832' } } }; }
+
+// --- Блок «Управление» (M11.10): запуск/стоп задач по аккаунтам ---
+const TASK_LABELS = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
+const TASKS = ['apply', 'messages', 'resume'];
+let controlAccounts = [];
+const controlStopped = {}; // account → true (показать «остановлено» до следующего запуска)
+
+async function loadControl() {
+  let accRes, taskRes;
+  try {
+    [accRes, taskRes] = await Promise.all([
+      fetch('/api/accounts').then(r => r.json()),
+      fetch('/api/tasks').then(r => r.json()),
+    ]);
+  } catch (e) {
+    document.getElementById('controlBody').innerHTML = '<div class="err">Ошибка загрузки управления</div>';
+    return;
+  }
+  controlAccounts = (accRes && accRes.accounts) || [];
+  const tasks = (taskRes && taskRes.tasks) || [];
+  const byAccount = {};
+  for (const t of tasks) if (t && t.account) byAccount[t.account] = t;
+
+  const el = document.getElementById('controlBody');
+  if (!controlAccounts.length) {
+    el.innerHTML = '<div class="muted">Аккаунтов не найдено (config/accounts/).</div>';
+    return;
+  }
+  el.innerHTML = controlAccounts.map((acc, i) => {
+    const run = byAccount[acc];
+    const running = !!run;
+    let statusTxt, statusCls;
+    if (running) {
+      statusTxt = 'работает: ' + (TASK_LABELS[run.task] || esc(run.task)) +
+        (run.live ? ' · LIVE' : ' · dry-run') + (run.pid != null ? ' · pid ' + esc(run.pid) : '');
+      statusCls = 'st-run';
+    } else if (controlStopped[acc]) {
+      statusTxt = 'остановлено'; statusCls = 'st-stop';
+    } else {
+      statusTxt = 'простаивает'; statusCls = 'st-idle';
+    }
+    const btns = TASKS.map(tk =>
+      '<button data-action="start" data-idx="' + i + '" data-task="' + tk + '"' +
+      (running ? ' disabled' : '') + '>' + TASK_LABELS[tk] + '</button>'
+    ).join(' ');
+    return '<div class="ctl-row">' +
+      '<div class="ctl-acc">' + esc(acc) + '</div>' +
+      '<label class="ctl-live"><input type="checkbox" id="live-' + i + '"' + (running ? ' disabled' : '') + '> Live</label>' +
+      '<div class="ctl-btns">' + btns + '</div>' +
+      '<button class="ctl-stop" data-action="stop" data-idx="' + i + '"' + (running ? '' : ' disabled') + '>Стоп</button>' +
+      '<div class="ctl-status ' + statusCls + '">' + statusTxt + '</div>' +
+      '</div>';
+  }).join('');
+
+  el.querySelectorAll('button[data-action="start"]').forEach(b =>
+    b.addEventListener('click', () => startTask(+b.dataset.idx, b.dataset.task)));
+  el.querySelectorAll('button[data-action="stop"]').forEach(b =>
+    b.addEventListener('click', () => stopTask(+b.dataset.idx)));
+}
+
+async function startTask(i, task) {
+  const acc = controlAccounts[i];
+  if (!acc) return;
+  const cb = document.getElementById('live-' + i);
+  const live = !!(cb && cb.checked);
+  if (live && !confirm('LIVE-запуск «' + (TASK_LABELS[task] || task) + '» для аккаунта «' + acc + '».\n' +
+      'Это реальные действия наружу (отклики / ответы / правка резюме). Продолжить?')) return;
+  delete controlStopped[acc];
+  try {
+    const res = await fetch('/api/start', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task, account: acc, live }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) alert('Не удалось запустить: ' + (json.reason || res.status));
+  } catch (e) {
+    alert('Ошибка запуска');
+  }
+  loadControl();
+}
+
+async function stopTask(i) {
+  const acc = controlAccounts[i];
+  if (!acc) return;
+  try {
+    const res = await fetch('/api/stop', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: acc }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) controlStopped[acc] = true;
+    else alert('Не удалось остановить: ' + (json.reason || res.status));
+  } catch (e) {
+    alert('Ошибка остановки');
+  }
+  loadControl();
+}
+
 load();
+loadControl();
+setInterval(loadControl, 5000);
 </script>
 </body>
 </html>`;
@@ -365,7 +507,10 @@ export function createServer(deps = {}) {
       // Защита: эти эндпоинты ЗАПУСКАЮТ действия наружу → пускаем только петлевые запросы
       // (защита от cross-origin POST из браузера оператора и DNS-rebinding).
       const isControl =
-        req.url === '/api/start' || req.url === '/api/stop' || req.url === '/api/tasks';
+        req.url === '/api/start' ||
+        req.url === '/api/stop' ||
+        req.url === '/api/tasks' ||
+        req.url === '/api/accounts';
       if (isControl && !isLoopbackRequest(req)) {
         sendJson(res, 403, { ok: false, error: 'Запрос отклонён: разрешён только localhost' });
         return;
@@ -410,6 +555,11 @@ export function createServer(deps = {}) {
 
       if (req.method === 'GET' && req.url === '/api/tasks') {
         sendJson(res, 200, { tasks: runner.list() });
+        return;
+      }
+
+      if (req.method === 'GET' && req.url === '/api/accounts') {
+        sendJson(res, 200, { accounts: await listAccounts() });
         return;
       }
 

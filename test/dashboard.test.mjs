@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePort, collectMetrics, createServer, isLoopbackRequest } from '../src/dashboard.js';
+import { parsePort, collectMetrics, createServer, isLoopbackRequest, listAccounts } from '../src/dashboard.js';
 
 // --- parsePort ---
 test('parsePort: дефолт 8787', () => {
@@ -146,6 +146,41 @@ test('POST /api/stop: проксирует в runner.stop', async () => {
     assert.equal(json.ok, true);
   });
   assert.deepEqual(calls, [{ account: 'acc1' }]);
+});
+
+// --- listAccounts (источник аккаунтов для блока «Управление» M11.10) ---
+const dirent = (name, isDir = true) => ({ name, isDirectory: () => isDir });
+
+test('listAccounts: только каталоги, без example/скрытых, отсортировано', async () => {
+  const readdirFn = async () => [
+    dirent('startsev'), dirent('belonogov'), dirent('example'),
+    dirent('.keep'), dirent('readme.txt', false),
+  ];
+  assert.deepEqual(await listAccounts({ readdirFn }), ['belonogov', 'startsev']);
+});
+
+test('listAccounts: readdir бросает → []', async () => {
+  const readdirFn = async () => { throw new Error('ENOENT'); };
+  assert.deepEqual(await listAccounts({ readdirFn }), []);
+});
+
+test('listAccounts: не-массив → []', async () => {
+  const readdirFn = async () => null;
+  assert.deepEqual(await listAccounts({ readdirFn }), []);
+});
+
+test('GET /api/accounts → { accounts: [...] }', async () => {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/accounts`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.ok(Array.isArray(json.accounts));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 // --- isLoopbackRequest (защита управляющих эндпоинтов) ---
