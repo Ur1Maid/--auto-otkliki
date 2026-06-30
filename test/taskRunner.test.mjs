@@ -209,3 +209,21 @@ test('start/stop: лог получает только task/account, без се
     assert.ok(!line.includes('секретный-поиск'));
   }
 });
+
+// --- M11.9: live-запуск даёт аудит-строку «LIVE запущен оператором», dry-run — нет ---
+test('start: live даёт аудит-строку «LIVE запущен оператором: <task>/<account>»', () => {
+  const logs = [];
+  const { runner } = makeRunner({ deps: { log: (m) => logs.push(m) } });
+  runner.start({ task: 'apply', account: 'acc1', live: true });
+  const audit = logs.find((l) => l.includes('LIVE запущен оператором'));
+  assert.ok(audit, 'нет аудит-строки live-запуска');
+  assert.ok(audit.includes('apply/acc1'));
+});
+
+test('start: dry-run НЕ помечается как LIVE в аудит-логе', () => {
+  const logs = [];
+  const { runner } = makeRunner({ deps: { log: (m) => logs.push(m) } });
+  runner.start({ task: 'apply', account: 'acc1' });
+  assert.ok(!logs.some((l) => l.includes('LIVE запущен оператором')));
+  assert.ok(logs.some((l) => l.includes('dry-run запущен')));
+});

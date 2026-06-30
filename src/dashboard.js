@@ -355,7 +355,9 @@ load();
  */
 export function createServer(deps = {}) {
   // Свой реестр на сервер: одна задача на аккаунт, трекинг PID (M11.8).
-  const runner = deps.runner || createTaskRunner();
+  // Аудит-лог запусков/остановок (M11.9): пишем в stdout через console.log
+  // (конвенция проекта). Строка содержит только task/account/live/pid — без ключа/PII/писем.
+  const runner = deps.runner || createTaskRunner({ log: (msg) => console.log(msg) });
 
   return http.createServer(async (req, res) => {
     try {
