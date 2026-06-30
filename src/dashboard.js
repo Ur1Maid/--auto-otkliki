@@ -20,7 +20,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { logsDir, accountsConfigDir } from './config.js';
+import { logsDir, statusDir, accountsConfigDir, getAccountLogPath } from './config.js';
 import {
   parseJsonl,
   aggregateResponses,
@@ -31,6 +31,8 @@ import {
   aggregateAlerts,
 } from './lib/metrics.js';
 import { createTaskRunner } from './lib/taskRunner.js';
+import { buildLiveView } from './lib/liveStatus.js';
+import { isWithinWorkingHours } from './lib/schedule.js';
 
 const DEFAULT_PORT = 8787;
 
@@ -254,6 +256,56 @@ export async function collectMetrics() {
   };
 }
 
+/**
+ * Собирает «живой» снимок для блока «Сейчас» (M11.11): хартбиты аккаунтов
+ * (logs/status/<account>.json), последние замеры ресурсов (logs/resources.jsonl) и последние
+ * события по аккаунту (responses-<account>.jsonl, только {status, at} — без title/url/PII).
+ * Никогда не бросает (битые/отсутствующие файлы пропускаются).
+ * @returns {Promise<object>}
+ */
+export async function collectLive() {
+  // Хартбиты аккаунтов из logs/status/*.json.
+  let statusFiles = [];
+  try {
+    statusFiles = await readdir(statusDir);
+  } catch {
+    statusFiles = [];
+  }
+  const heartbeats = [];
+  for (const f of statusFiles.filter((x) => /\.json$/.test(x))) {
+    const text = await readOptional(path.join(statusDir, f));
+    try {
+      const obj = JSON.parse(text);
+      if (obj && typeof obj === 'object') heartbeats.push(obj);
+    } catch {
+      // битый файл статуса — пропускаем
+    }
+  }
+
+  // Замеры ресурсов (общие по процессу демона).
+  const resources = parseJsonl(await readOptional(path.join(logsDir, 'resources.jsonl')));
+
+  // Аккаунты из config + последние события из responses-<account>.jsonl (санитизация в liveStatus).
+  const accounts = await listAccounts();
+  const eventsByAccount = {};
+  for (const account of accounts) {
+    // Канонический путь лога аккаунта (та же нормализация, что у живого флоу).
+    const entries = parseJsonl(await readOptional(getAccountLogPath(account)));
+    // UI показывает последние N событий — отдаём хвост (как collectMetrics, читаем файл целиком).
+    eventsByAccount[account] = entries.slice(-50);
+  }
+
+  const now = new Date();
+  return buildLiveView({
+    accounts,
+    heartbeats,
+    resources,
+    eventsByAccount,
+    now,
+    withinWorkingHours: isWithinWorkingHours(now),
+  });
+}
+
 // HTML страницы (Chart.js по CDN). Данные тянутся с /api/metrics.
 const PAGE = `<!doctype html>
 <html lang="ru">
@@ -294,6 +346,19 @@ const PAGE = `<!doctype html>
   .st-run { color: #7bd88f; }
   .st-stop { color: #ffb454; }
   .st-idle { color: #8a8f98; }
+  .live-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; }
+  .lv-working { background: #7bd88f; }
+  .lv-stalled { background: #ff6b6b; }
+  .lv-captcha { background: #ffb454; }
+  .lv-idle { background: #8a8f98; }
+  .live-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
+  .live-row:last-child { border-bottom: none; }
+  .live-acc { font-weight: 600; min-width: 120px; display: flex; align-items: center; gap: 8px; }
+  .live-task { font-size: 13px; color: #c8ccd4; min-width: 150px; }
+  .live-bar { flex: 1; min-width: 120px; height: 8px; background: #242832; border-radius: 5px; overflow: hidden; }
+  .live-bar > i { display: block; height: 100%; background: #4cafef; }
+  .live-meta { font-size: 12px; color: #8a8f98; }
+  .live-events { font-size: 11px; color: #8a8f98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 </style>
 </head>
 <body>
@@ -304,6 +369,12 @@ const PAGE = `<!doctype html>
     <h2>Управление задачами</h2>
     <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме. Дефолт — <b>dry-run</b> (без действий наружу); тумблер Live включает реальные действия (требует подтверждения). Одна задача на аккаунт.</div>
     <div id="controlBody" class="muted">Загрузка…</div>
+  </div>
+  <div class="panel" style="margin-bottom: 24px">
+    <h2>Сейчас</h2>
+    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Автообновление 5 с.</div>
+    <div id="liveRes" class="muted" style="margin-bottom: 10px"></div>
+    <div id="liveBody" class="muted">Загрузка…</div>
   </div>
   <div class="grid">
     <div class="panel"><h2>Отклики по дням</h2><canvas id="byDay"></canvas></div>
@@ -330,10 +401,12 @@ function renderAlerts(a) {
       '<span class="when">' + esc(when) + '</span></div>';
   }).join('');
 }
+let lastMetrics = null; // снимок /api/metrics для блока «Сейчас» (токены/стоимость).
 async function load() {
   let m;
   try { m = await (await fetch('/api/metrics')).json(); }
   catch (e) { document.getElementById('cards').innerHTML = '<div class="card err">Ошибка загрузки</div>'; return; }
+  lastMetrics = m;
   document.getElementById('gen').textContent = 'обновлено ' + new Date(m.generatedAt).toLocaleString('ru');
 
   const conv = m.funnel.conversionPct.toFixed(1) + '%';
@@ -481,9 +554,66 @@ async function stopTask(i) {
   loadControl();
 }
 
+// --- Блок «Сейчас» (M11.11): живое состояние прогонов ---
+const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', idle: 'простой' };
+const LIVE_TASK_LABEL = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
+
+function fmtAge(ms) {
+  if (ms == null) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + ' с назад';
+  const m = Math.round(s / 60);
+  return m + ' мин назад';
+}
+
+async function loadLive() {
+  let v;
+  try { v = await (await fetch('/api/live')).json(); }
+  catch (e) { document.getElementById('liveBody').innerHTML = '<div class="err">Ошибка загрузки</div>'; return; }
+
+  // Ресурсы + токены/стоимость за сегодня (из последнего снимка метрик).
+  const r = v.resources && v.resources.latest;
+  const resTxt = r
+    ? 'RSS ' + esc(r.rssMb) + ' МБ · heap ' + esc(r.heapMb) + ' МБ · CPU ' + esc(r.cpuPercent) + '%' +
+      (r.openContexts != null ? ' · контекстов ' + esc(r.openContexts) : '')
+    : 'нет замеров ресурсов (демон не запущен)';
+  let tokTxt = '';
+  if (lastMetrics) {
+    const t = lastMetrics.tokenTotals || {};
+    const promptTok = (t.promptTokens || 0), completionTok = (t.completionTokens || 0);
+    tokTxt = ' · токены: вход ' + esc(promptTok) + ' / выход ' + esc(completionTok) +
+      ' · ≈$' + Number(lastMetrics.estCostUsd || 0).toFixed(2);
+  }
+  document.getElementById('liveRes').innerHTML = esc(resTxt) + tokTxt;
+
+  const el = document.getElementById('liveBody');
+  if (!v.accounts || !v.accounts.length) {
+    el.innerHTML = '<div class="muted">Нет аккаунтов / активных прогонов.</div>';
+    return;
+  }
+  el.innerHTML = v.accounts.map(a => {
+    const live = a.liveness || 'idle';
+    const taskTxt = a.task ? (LIVE_TASK_LABEL[a.task] || esc(a.task)) : 'простаивает';
+    const phaseTxt = a.phase ? ' · ' + esc(a.phase) : '';
+    const progTxt = (a.index != null && a.total != null) ? esc(a.index) + '/' + esc(a.total) : '';
+    const pct = a.progressPct != null ? a.progressPct : 0;
+    const events = (a.recentEvents || []).map(e => esc(e.status)).join(', ');
+    return '<div class="live-row">' +
+      '<div class="live-acc"><span class="live-dot lv-' + esc(live) + '"></span>' + esc(a.account) + '</div>' +
+      '<div class="live-task">' + taskTxt + phaseTxt + ' <span class="st-' +
+        (live === 'working' ? 'run' : live === 'idle' ? 'idle' : 'stop') + '">(' + (LIVENESS_LABEL[live] || live) + ')</span></div>' +
+      '<div class="live-bar"><i style="width:' + pct + '%"></i></div>' +
+      '<div class="live-meta">' + (progTxt ? progTxt + ' · ' : '') + fmtAge(a.ageMs) + '</div>' +
+      '<div class="live-events">' + (events || '—') + '</div>' +
+      '</div>';
+  }).join('');
+}
+
 load();
 loadControl();
+loadLive();
 setInterval(loadControl, 5000);
+setInterval(loadLive, 5000);
 </script>
 </body>
 </html>`;
@@ -566,6 +696,12 @@ export function createServer(deps = {}) {
       // --- Метрики и страница (GET) ---
       if (req.url === '/api/metrics') {
         const data = await collectMetrics();
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(data));
+        return;
+      }
+      if (req.url === '/api/live') {
+        const data = await collectLive();
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(data));
         return;

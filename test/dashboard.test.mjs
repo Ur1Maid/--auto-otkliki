@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePort, collectMetrics, createServer, isLoopbackRequest, listAccounts } from '../src/dashboard.js';
+import { parsePort, collectMetrics, collectLive, createServer, isLoopbackRequest, listAccounts } from '../src/dashboard.js';
 
 // --- parsePort ---
 test('parsePort: дефолт 8787', () => {
@@ -39,6 +39,32 @@ test('collectMetrics: возвращает агрегаты с нужными к
   }
   assert.ok(Array.isArray(m.funnel.stages));
   assert.equal(typeof m.estCostUsd, 'number');
+});
+
+// --- collectLive (smoke: читает реальный logs/, не бросает) ---
+test('collectLive: возвращает живой снимок с нужными ключами, не бросает', async () => {
+  const v = await collectLive();
+  for (const key of ['accounts', 'resources', 'generatedAt']) {
+    assert.ok(key in v, `нет ключа ${key}`);
+  }
+  assert.ok(Array.isArray(v.accounts));
+  assert.ok('latest' in v.resources && 'recent' in v.resources);
+  assert.ok(Array.isArray(v.resources.recent));
+});
+
+test('createServer: GET /api/live → 200 JSON', async () => {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/live`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.ok('accounts' in json);
+    assert.ok(Array.isArray(json.accounts));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 // --- createServer (smoke: /api/metrics отдаёт валидный JSON) ---
