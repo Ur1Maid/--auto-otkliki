@@ -13,6 +13,7 @@ logs/summary.json
 logs/summary-*.json
 logs/daily-*.json
 logs/alerts.jsonl
+logs/status/
 logs/*.log
 data/*.md
 data/*.txt

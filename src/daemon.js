@@ -43,6 +43,7 @@ import { loadAccountProfile } from './lib/accountProfile.js';
 import { launchBrowser } from './browser.js';
 import { rootDir, logsDir, getAccountSummaryPath } from './config.js';
 import { runUsageCounter } from './lib/usageCounter.js';
+import { writeHeartbeatFile } from './lib/statusWriter.js';
 import { confirm } from './prompts.js';
 import { parseDaemonArgs, buildReviewChildArgs } from './lib/daemonArgs.js';
 
@@ -179,6 +180,15 @@ export async function runMessagesPass(opts, report, tracker) {
   for (const account of opts.accounts) {
     let browser;
     try {
+      // Хартбит старта шага: панель управления (M11) видит, что поллинг сообщений идёт.
+      await writeHeartbeatFile(account, {
+        task: 'messages',
+        phase: 'polling',
+        lastEvent: 'starting',
+        state: 'ok',
+        ts: new Date(),
+      });
+
       const launched = await launchBrowser({ account, useSavedSession: true });
       browser = launched.browser;
       const { page } = launched;
@@ -224,6 +234,17 @@ export async function runMessagesPass(opts, report, tracker) {
         skippedNoReply: result.skipped,
         manual: result.manual,
       });
+
+      // Хартбит завершения шага: index/total = обработано/всего тредов (только счётчики, без PII).
+      await writeHeartbeatFile(account, {
+        task: 'messages',
+        phase: 'done',
+        index: result.processed,
+        total: result.processed,
+        lastEvent: 'finished',
+        state: 'ok',
+        ts: new Date(),
+      });
     } catch (err) {
       // Изоляция аккаунта: один не роняет день.
       console.error(`[daemon] [${account}] Ошибка поллинга сообщений: ${err.message}`);
@@ -256,6 +277,15 @@ export async function runMicroEditPass(opts, report) {
   for (const account of opts.accounts) {
     let browser;
     try {
+      // Хартбит старта шага: панель управления (M11) видит, что правка резюме идёт.
+      await writeHeartbeatFile(account, {
+        task: 'resume',
+        phase: 'editing',
+        lastEvent: 'starting',
+        state: 'ok',
+        ts: new Date(),
+      });
+
       const launched = await launchBrowser({ account, useSavedSession: true });
       browser = launched.browser;
       const { page } = launched;
@@ -273,6 +303,17 @@ export async function runMicroEditPass(opts, report) {
         // В отчёт: applied только при реально сохранённой правке. dry-run → не applied.
         report.recordResumeEdit({ account, applied: r.changed });
       }
+
+      // Хартбит завершения шага: index/total = число обработанных резюме (только счётчики).
+      await writeHeartbeatFile(account, {
+        task: 'resume',
+        phase: 'done',
+        index: perResume.length,
+        total: perResume.length,
+        lastEvent: 'finished',
+        state: 'ok',
+        ts: new Date(),
+      });
     } catch (err) {
       // Изоляция аккаунта: один не роняет день.
       console.error(`[daemon] [${account}] Ошибка правки резюме: ${err.message}`);

@@ -8,6 +8,7 @@ export const storageStatePath = path.join(sessionDir, 'storage-state.json');
 export const dataDir = path.join(rootDir, 'data');
 export const inputDir = path.join(rootDir, 'input');
 export const logsDir = path.join(rootDir, 'logs');
+export const statusDir = path.join(logsDir, 'status');
 export const configDir = path.join(rootDir, 'config');
 export const accountsConfigDir = path.join(configDir, 'accounts');
 export const logPath = path.join(logsDir, 'responses-log.jsonl');
@@ -60,11 +61,16 @@ export function getAccountSummaryPath(account = 'default') {
     : path.join(logsDir, `summary-${normalized}.json`);
 }
 
+export function getAccountStatusPath(account = 'default') {
+  return path.join(statusDir, `${normalizeAccountName(account)}.json`);
+}
+
 export async function ensureAppDirs() {
   await mkdir(sessionDir, { recursive: true });
   await mkdir(dataDir, { recursive: true });
   await mkdir(inputDir, { recursive: true });
   await mkdir(logsDir, { recursive: true });
+  await mkdir(statusDir, { recursive: true });
   await mkdir(configDir, { recursive: true });
   await mkdir(accountsConfigDir, { recursive: true });
 }

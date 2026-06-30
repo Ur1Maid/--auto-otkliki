@@ -36,6 +36,7 @@ import { isSubmitAllowed } from './lib/applyGuard.js';
 import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTON_TEXTS } from './lib/selectors.js';
 import { createRunSummary } from './lib/runSummary.js';
 import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
+import { writeHeartbeatFile } from './lib/statusWriter.js';
 
 
 const DEFAULT_LIMIT = 200;
@@ -1734,6 +1735,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     }
 
     let remoteApplied = 0;
+    // Хартбит старта: панель управления (M11) видит, что прогон начался (index 0).
+    await writeHeartbeatFile(account, {
+      task: 'apply',
+      phase: 'review',
+      index: 0,
+      total: vacancies.length,
+      lastEvent: 'starting',
+      state: 'ok',
+      ts: new Date(),
+    });
     for (let index = 0; index < vacancies.length; index += 1) {
       const url = vacancies[index];
 
@@ -1752,6 +1763,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         });
         summary.record(result);
         await appendLog({ url, ...result }, account);
+        // Хартбит прогресса: index/total + статус последней вакансии (только метка-статус, без PII).
+        await writeHeartbeatFile(account, {
+          task: 'apply',
+          phase: 'review',
+          index: index + 1,
+          total: vacancies.length,
+          lastEvent: result.status,
+          state: 'ok',
+          ts: new Date(),
+        });
         if (result.status === 'quit') break;
         // Считаем удалённые «отклики» (в dry-run — «откликнулся бы») для итогового лога.
         if ((result.status === 'clicked' || result.status === 'dry_run') && result.remote) remoteApplied += 1;
@@ -1770,6 +1791,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         console.error(`[${account}] Ошибка на ${url}: ${error.message}`);
         summary.record({ status: 'error' });
         await appendLog({ url, status: 'error', error: error.message }, account);
+        // Хартбит ошибки: фиксируем метку-статус (без текста ошибки/PII), прогон продолжается.
+        await writeHeartbeatFile(account, {
+          task: 'apply',
+          phase: 'review',
+          index: index + 1,
+          total: vacancies.length,
+          lastEvent: 'error',
+          state: 'ok',
+          ts: new Date(),
+        });
       }
 
       // Анти-бот-пейсинг: человеческая рандомная пауза между откликами.
@@ -1806,6 +1837,16 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       JSON.stringify(summaryObj, null, 2),
       'utf8',
     ).catch(() => {});
+
+    // Финальный хартбит: прогон аккаунта завершён (панель показывает «готово», не «завис»).
+    await writeHeartbeatFile(account, {
+      task: 'apply',
+      phase: 'done',
+      total: vacancies.length,
+      lastEvent: 'finished',
+      state: 'ok',
+      ts: new Date(),
+    });
   } finally {
     await saveCache(scoreCachePath, scoreCache);
     // Закрытие — best-effort: ошибка close не должна ронять прогон других аккаунтов.
