@@ -663,8 +663,8 @@ if (historyBlock) historyBlock.addEventListener('toggle', () => {
 load();
 loadControl();
 loadLive();
-setInterval(loadControl, 5000);
-setInterval(loadLive, 5000);
+setInterval(loadControl, 1000);
+setInterval(loadLive, 1000);
 </script>
 </body>
 </html>`;
