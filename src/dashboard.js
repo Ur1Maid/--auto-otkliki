@@ -463,7 +463,7 @@ const PAGE = `<!doctype html>
   <div class="sub">Локально (127.0.0.1). Фокус — текущий прогон: что программа делает сейчас. Агрегаты за всю историю — в блоке «История» ниже.</div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Управление задачами</h2>
-    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. «Старт» = <b>реальный (LIVE) прогон</b> на hh.ru; перед запуском — одно подтверждение.</div>
+    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. «Старт» = <b>реальный (LIVE) прогон</b> на hh.ru, запускается сразу без подтверждения.</div>
     <div class="ctl-search" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
       <span class="sub">Поиск для «Отклики»:</span>
       <input id="srch-text" type="text" placeholder="text (напр. DevOps)" value="DevOps" style="flex: 1; min-width: 160px">
@@ -643,8 +643,6 @@ async function loadControl() {
 async function startTask(i, task) {
   const acc = controlAccounts[i];
   if (!acc) return;
-  if (!confirm('Запустить РЕАЛЬНЫЙ прогон «' + (TASK_LABELS[task] || task) + '» для «' + acc + '»?\\n' +
-      'Это реальные отклики/ответы на hh.ru.')) return;
   delete controlStopped[acc + '\0' + task];
   const payload = { task, account: acc, live: true };
   if (task === 'apply') {
