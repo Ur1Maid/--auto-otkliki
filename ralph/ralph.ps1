@@ -68,8 +68,14 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
 
   $headSha = (git rev-parse HEAD).Trim()
 
-  & claude -p $prompt --model $Model --max-turns 80 @permArgs 2>&1 |
+  # Headless: закрываем stdin ($null) — иначе claude ждёт ввод и пишет warning в stderr;
+  # под $ErrorActionPreference=Stop любой stderr нативной команды роняет цикл, поэтому на
+  # время вызова переводим EAP в Continue и возвращаем обратно после.
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $null | & claude -p $prompt --model $Model --max-turns 80 @permArgs 2>&1 |
     Tee-Object -FilePath $log
+  $ErrorActionPreference = $prevEAP
 
   if (Select-String -Path $log -Pattern "RALPH: ALL DONE" -Quiet) {
     Write-Host "[ralph] Бэклог пуст (RALPH: ALL DONE). Готово." -ForegroundColor Green
