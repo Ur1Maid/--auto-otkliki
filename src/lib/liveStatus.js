@@ -13,6 +13,7 @@
 //                                now: new Date(), withinWorkingHours: isWithinWorkingHours(now) });
 
 import { isStale } from './heartbeat.js';
+import { formatPhase } from './runPhase.js';
 
 /** Литералы индикатора живости (цвета в UI: working=зелёный, stalled=красный, captcha=оранжевый). */
 export const LIVENESS_WORKING = 'working';
@@ -115,15 +116,21 @@ function buildLiveAccount(account, heartbeat, events, opts) {
     .slice(-limit)
     .reverse();
 
+  const phase = hb && typeof hb.phase === 'string' ? hb.phase : '';
+  const lastEvent = hb && typeof hb.lastEvent === 'string' ? hb.lastEvent : '';
+  const state = hb && typeof hb.state === 'string' ? hb.state : 'ok';
+
   return {
     account,
     task: hb && typeof hb.task === 'string' ? hb.task : '',
-    phase: hb && typeof hb.phase === 'string' ? hb.phase : '',
+    phase,
+    // Человекочитаемая фраза текущего шага для UI (M12.2). Пустой хартбит → «Простаивает».
+    phaseLabel: hb ? formatPhase({ phase, index, total, state, lastEvent }) : 'Простаивает',
     index,
     total,
     progressPct: progressPct(index, total),
-    lastEvent: hb && typeof hb.lastEvent === 'string' ? hb.lastEvent : '',
-    state: hb && typeof hb.state === 'string' ? hb.state : 'ok',
+    lastEvent,
+    state,
     ts: hb ? toIso(hb.ts) : null,
     ageMs,
     liveness: accountLiveness(hb, opts),

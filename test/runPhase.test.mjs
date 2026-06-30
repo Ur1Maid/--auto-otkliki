@@ -5,6 +5,7 @@ import {
   ERROR_REASONS,
   normalizePhase,
   classifyErrorReason,
+  formatPhase,
 } from '../src/lib/runPhase.js';
 
 // --- Константы ---
@@ -129,4 +130,62 @@ test('classifyErrorReason: всегда возвращает литерал из
   for (const input of inputs) {
     assert.ok(Object.values(ERROR_REASONS).includes(classifyErrorReason(input)));
   }
+});
+
+// --- formatPhase ---
+
+test('formatPhase: collecting со счётчиком и без', () => {
+  assert.equal(formatPhase({ phase: 'collecting', index: 0, total: 250 }), 'Собирает вакансии: 250');
+  // пул ещё не собран (total нет) — берём index как количество собранных
+  assert.equal(formatPhase({ phase: 'collecting', index: 42, total: null }), 'Собирает вакансии: 42');
+  // ничего ещё не собрано — без числа
+  assert.equal(formatPhase({ phase: 'collecting', index: 0, total: null }), 'Собирает вакансии…');
+});
+
+test('formatPhase: scoring/applying показывают прогресс i/total', () => {
+  assert.equal(formatPhase({ phase: 'scoring', index: 12, total: 40 }), 'Оценивает 12/40');
+  assert.equal(formatPhase({ phase: 'applying', index: 12, total: 40 }), 'Откликается 12/40');
+  // нет прогресса → с многоточием
+  assert.equal(formatPhase({ phase: 'scoring' }), 'Оценивает…');
+  assert.equal(formatPhase({ phase: 'applying', index: 5, total: 0 }), 'Откликается…');
+});
+
+test('formatPhase: done → Готово', () => {
+  assert.equal(formatPhase({ phase: 'done', index: 40, total: 40 }), 'Готово');
+});
+
+test('formatPhase: error → «Ошибка: <русская причина>»', () => {
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'timeout' }), 'Ошибка: таймаут');
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'network' }), 'Ошибка: сеть');
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'closed' }), 'Ошибка: браузер закрыт');
+  // нераспознанная/пустая причина → «неизвестно»
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'нечто' }), 'Ошибка: неизвестно');
+  assert.equal(formatPhase({ phase: 'error' }), 'Ошибка: неизвестно');
+});
+
+test('formatPhase: captcha (state) важнее любой фазы', () => {
+  assert.equal(formatPhase({ phase: 'applying', index: 5, total: 10, state: 'captcha' }), 'Капча');
+  assert.equal(formatPhase({ phase: 'collecting', state: 'captcha' }), 'Капча');
+});
+
+test('formatPhase: неизвестная/пустая фаза → Простаивает', () => {
+  assert.equal(formatPhase({ phase: '' }), 'Простаивает');
+  assert.equal(formatPhase({ phase: 'review' }), 'Простаивает');
+  assert.equal(formatPhase({}), 'Простаивает');
+});
+
+test('formatPhase: мусор/не-объект не бросает', () => {
+  assert.equal(formatPhase(null), 'Простаивает');
+  assert.equal(formatPhase(undefined), 'Простаивает');
+  assert.equal(formatPhase(42), 'Простаивает');
+  assert.equal(formatPhase('collecting'), 'Простаивает');
+});
+
+test('formatPhase: PII из lastEvent не утекает (только метка причины)', () => {
+  // lastEvent в error-хартбите — литерал classifyErrorReason; даже если туда попадёт мусор
+  // с URL, formatPhase сводит к фиксированной метке (не эхо-ит вход).
+  const out = formatPhase({ phase: 'error', lastEvent: 'https://hh.ru/vacancy/1?token=SECRET' });
+  assert.equal(out, 'Ошибка: неизвестно');
+  assert.ok(!out.includes('hh.ru'));
+  assert.ok(!out.includes('SECRET'));
 });

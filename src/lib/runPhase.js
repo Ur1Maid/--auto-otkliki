@@ -119,3 +119,68 @@ export function classifyErrorReason(error) {
   }
   return ERROR_REASONS.UNKNOWN;
 }
+
+/**
+ * Человекочитаемые (русские) метки причин ошибки для панели. Соответствуют ERROR_REASONS.
+ * Неизвестный литерал → дефолтная метка «неизвестно».
+ */
+const REASON_LABELS = Object.freeze({
+  [ERROR_REASONS.TIMEOUT]: 'таймаут',
+  [ERROR_REASONS.NAVIGATION]: 'страница не загрузилась',
+  [ERROR_REASONS.NETWORK]: 'сеть',
+  [ERROR_REASONS.DETACHED]: 'элемент пропал',
+  [ERROR_REASONS.CLOSED]: 'браузер закрыт',
+  [ERROR_REASONS.UNKNOWN]: 'неизвестно',
+});
+
+/** Конечное положительное целое из значения, иначе null. */
+function positiveInt(value) {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
+/**
+ * Превращает снимок текущего шага прогона в короткую русскую фразу для блока «Сейчас».
+ * Чистая: только из переданных полей, без IO/времени. Никогда не бросает.
+ *
+ * Примеры: «Собирает вакансии: 250», «Оценивает 12/40», «Откликается 12/40»,
+ * «Ошибка: таймаут», «Капча», «Готово», «Простаивает».
+ *
+ * Приоритет: капча (state==='captcha') важнее фазы — на капче прогон стоит. Причину ошибки
+ * берём из `lastEvent` (туда review.js кладёт литерал classifyErrorReason — без PII/URL).
+ *
+ * @param {object} [snapshot] — { phase, index, total, state, lastEvent }
+ *   (совпадает с формой аккаунта из liveStatus.buildLiveView)
+ * @returns {string} человекочитаемая фраза
+ */
+export function formatPhase(snapshot = {}) {
+  const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  if (s.state === 'captcha') return 'Капча';
+
+  const phase = typeof s.phase === 'string' ? s.phase.trim().toLowerCase() : '';
+  const index = positiveInt(s.index);
+  const total = positiveInt(s.total);
+  const progress = index != null && total != null ? `${index}/${total}` : null;
+
+  switch (phase) {
+    case RUN_PHASES.COLLECTING: {
+      // index/total ещё может не быть (пул не собран) — тогда без счётчика. Сегодняшний
+      // producer (review.js) на сборе шлёт index:0/total:null → ветка index — forward-compat
+      // на случай, если позже начнём слать «собрано N» инкрементально.
+      const count = total != null ? total : index;
+      return count != null ? `Собирает вакансии: ${count}` : 'Собирает вакансии…';
+    }
+    case RUN_PHASES.SCORING:
+      return progress ? `Оценивает ${progress}` : 'Оценивает…';
+    case RUN_PHASES.APPLYING:
+      return progress ? `Откликается ${progress}` : 'Откликается…';
+    case RUN_PHASES.DONE:
+      return 'Готово';
+    case RUN_PHASES.ERROR: {
+      const reason = typeof s.lastEvent === 'string' ? s.lastEvent.trim().toLowerCase() : '';
+      const label = REASON_LABELS[reason] || REASON_LABELS[ERROR_REASONS.UNKNOWN];
+      return `Ошибка: ${label}`;
+    }
+    default:
+      return 'Простаивает';
+  }
+}

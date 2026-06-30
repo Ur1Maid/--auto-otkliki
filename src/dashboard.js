@@ -609,8 +609,8 @@ async function loadLive() {
   el.innerHTML = v.accounts.map(a => {
     const live = a.liveness || 'idle';
     const taskTxt = a.task ? (LIVE_TASK_LABEL[a.task] || esc(a.task)) : 'простаивает';
-    const phaseTxt = a.phase ? ' · ' + esc(a.phase) : '';
-    const progTxt = (a.index != null && a.total != null) ? esc(a.index) + '/' + esc(a.total) : '';
+    // phaseLabel уже несёт прогресс словами («Откликается 12/40») — в live-meta его не дублируем.
+    const phaseTxt = a.phaseLabel ? ' · ' + esc(a.phaseLabel) : '';
     const pct = a.progressPct != null ? a.progressPct : 0;
     const events = (a.recentEvents || []).map(e => esc(e.status)).join(', ');
     return '<div class="live-row">' +
@@ -618,7 +618,7 @@ async function loadLive() {
       '<div class="live-task">' + taskTxt + phaseTxt + ' <span class="st-' +
         (live === 'working' ? 'run' : live === 'idle' ? 'idle' : 'stop') + '">(' + (LIVENESS_LABEL[live] || live) + ')</span></div>' +
       '<div class="live-bar"><i style="width:' + pct + '%"></i></div>' +
-      '<div class="live-meta">' + (progTxt ? progTxt + ' · ' : '') + fmtAge(a.ageMs) + '</div>' +
+      '<div class="live-meta">' + fmtAge(a.ageMs) + '</div>' +
       '<div class="live-events">' + (events || '—') + '</div>' +
       '</div>';
   }).join('');
