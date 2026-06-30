@@ -5,6 +5,7 @@
 
 ---
 
+2026-07-01 | M17.2 | DONE | Документация нового поведения панели (после M17.1). CLAUDE.md: Non-negotiables — панель стартует live по умолчанию с одним confirm-диалогом (UI-тумблера dry-run нет), бэкенд-дефолт остаётся dry-run-safe (`buildTaskCommand` live=false, `daemonArgs` dryRun=true) для CLI/тестов/`verify-live-flow`, server live-инвариант (`body.live===true`, loopback-bind) и `decideSend`-гейт не ослаблять; Commands — комментарии у `dashboard`/`daemon --task` + строка про панель=LIVE-по-умолчанию vs CLI=dry-run-по-умолчанию. docs/daemon.md: блок «Главный принцип безопасности» дополнен исключением для панели (Старт=live+1 confirm, honesty/decideSend сохранены). Только .md, код не тронут. Факты сверены с диффом M17.1 (payload live:true, Live-чекбокс убран) + PROGRESS M7.2/M11.7. npm test 1184/1184 зелёных.
 2026-06-24 | M0.1 | DONE | bootstrap: `npm test` + `test/smoke.test.mjs` (node --check на всех src/*.js).
 2026-06-24 | M0.2 | DONE | bootstrap: ralph/ (PROMPT, ROADMAP, ralph.ps1, ralph.sh, README), ветка ralph/auto.
 2026-06-25 | M1.1 | DONE | src/lib/text.js (parseJsonObject, cleanGeneratedAnswer) + test/text.test.mjs (12). implementer(Sonnet)→code-reviewer(APPROVE)→npm test 19/19. looksLikeEmployerVoice оставлен (M1.5).
