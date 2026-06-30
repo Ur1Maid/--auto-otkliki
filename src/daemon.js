@@ -209,10 +209,13 @@ export async function runMessagesPass(opts, report, tracker) {
         preferences,
       };
 
-      // confirmFn: если не replyAuto — спрашиваем оператора через промпт.
-      const confirmFn = opts.replyAuto
-        ? undefined
-        : (preview) => confirm(`[daemon] Отправить ответ в чате?\n${preview}\n`);
+      // confirmFn: подключаем ИНТЕРАКТИВНЫЙ промпт ТОЛЬКО когда есть TTY и не replyAuto.
+      // Без TTY (панель/демон/Electron) confirm() читать stdin не может — поэтому
+      // confirmFn не подключаем вовсе: processUnread → confirmed=false → decideSend
+      // вернёт not_confirmed (dry-run и так блокирует). Никаких зависаний на stdin (M16.2).
+      const confirmFn = !opts.replyAuto && process.stdin.isTTY
+        ? (preview) => confirm(`[daemon] Отправить ответ в чате?\n${preview}\n`)
+        : undefined;
 
       const result = await processUnread(page, {
         account,

@@ -66,7 +66,7 @@ export function buildTaskCommand({ task, account, live = false, limit, text, are
 
   const argv = [];
 
-  // Порядок: --task, --account, затем apply-only поля, затем --live последним.
+  // Порядок: --task, --account, затем apply-only поля, затем --reply-auto, --live последним.
   argv.push('--task', normalizedTask);
   argv.push('--account', trimmedAccount);
 
@@ -92,6 +92,15 @@ export function buildTaskCommand({ task, account, live = false, limit, text, are
         argv.push('--limit', String(n));
       }
     }
+  }
+
+  // --reply-auto: ТОЛЬКО для messages в live-режиме. Оператор уже подтвердил Live
+  // в панели (тумблер Dry-run→Live + confirm-диалог) — это и есть подтверждение
+  // авто-отправки ответов. Dry-run → флаг НЕ добавляется (preview без отправки);
+  // apply/resume его не используют. decideSend-гейт остаётся load-bearing на стороне
+  // отправки (replyAuto===true строго, dry-run не шлёт) — флаг лишь разрешает.
+  if (normalizedTask === 'messages' && live === true) {
+    argv.push('--reply-auto');
   }
 
   // --live: ТОЛЬКО при явном live === true (ключевой инвариант безопасности).

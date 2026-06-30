@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTaskCommand, canStart } from '../src/lib/taskControl.js';
+import { parseDaemonArgs } from '../src/lib/daemonArgs.js';
 
 // Все тесты детерминированы: без IO, сети, Date.now().
 
@@ -72,6 +73,75 @@ test('buildTaskCommand: live truthy-но-не-true (1) → --live ОТСУТСТ
 test('buildTaskCommand: live="yes" (строка) → --live ОТСУТСТВУЕТ', () => {
   const argv = buildTaskCommand({ task: 'apply', account: 'acc', live: 'yes' });
   assert.ok(!argv.includes('--live'));
+});
+
+// ============================================================
+// buildTaskCommand — --reply-auto для messages ТОЛЬКО при live (M16.3)
+// ============================================================
+
+test('buildTaskCommand: messages live=true → --reply-auto ПРИСУТСТВУЕТ (авто-отправка ответов)', () => {
+  const argv = buildTaskCommand({ task: 'messages', account: 'acc', live: true });
+  assert.ok(argv.includes('--reply-auto'), 'live messages должны нести --reply-auto');
+});
+
+test('buildTaskCommand: messages live=false → --reply-auto ОТСУТСТВУЕТ (dry-run preview)', () => {
+  const argv = buildTaskCommand({ task: 'messages', account: 'acc', live: false });
+  assert.ok(!argv.includes('--reply-auto'), 'dry-run messages не авто-отправляют');
+});
+
+test('buildTaskCommand: messages по умолчанию (без live) → --reply-auto ОТСУТСТВУЕТ', () => {
+  const argv = buildTaskCommand({ task: 'messages', account: 'acc' });
+  assert.ok(!argv.includes('--reply-auto'));
+});
+
+test('buildTaskCommand: messages live truthy-но-не-true (1) → --reply-auto ОТСУТСТВУЕТ (строгий ===)', () => {
+  const argv = buildTaskCommand({ task: 'messages', account: 'acc', live: 1 });
+  assert.ok(!argv.includes('--reply-auto'), 'только явный live===true даёт --reply-auto');
+});
+
+test('buildTaskCommand: apply live=true → --reply-auto ОТСУТСТВУЕТ (флаг только для messages)', () => {
+  const argv = buildTaskCommand({ task: 'apply', account: 'acc', live: true });
+  assert.ok(!argv.includes('--reply-auto'), 'apply не использует --reply-auto');
+});
+
+test('buildTaskCommand: resume live=true → --reply-auto ОТСУТСТВУЕТ (флаг только для messages)', () => {
+  const argv = buildTaskCommand({ task: 'resume', account: 'acc', live: true });
+  assert.ok(!argv.includes('--reply-auto'), 'resume не использует --reply-auto');
+});
+
+test('buildTaskCommand: алиас poll live=true → --reply-auto ПРИСУТСТВУЕТ (нормализуется в messages)', () => {
+  const argv = buildTaskCommand({ task: 'poll', account: 'acc', live: true });
+  assert.ok(argv.includes('--reply-auto'), 'poll→messages live должен нести --reply-auto');
+});
+
+// Инвариант безопасности: --reply-auto НИКОГДА не появляется без --live (иначе авто-отправка
+// могла бы быть включена в dry-run-режиме). Локаем связку против будущих правок.
+test('buildTaskCommand: --reply-auto ⇒ --live (никогда не разъединены)', () => {
+  for (const task of ['apply', 'messages', 'resume', 'poll']) {
+    for (const live of [true, false, 1, 'yes', undefined]) {
+      const argv = buildTaskCommand({ task, account: 'acc', live });
+      if (argv.includes('--reply-auto')) {
+        assert.ok(argv.includes('--live'), `--reply-auto без --live для task=${task}, live=${String(live)}`);
+      }
+    }
+  }
+});
+
+// Round-trip: argv live messages → parseDaemonArgs → replyAuto:true, dryRun:false.
+test('buildTaskCommand → parseDaemonArgs: live messages даёт replyAuto:true и dryRun:false', () => {
+  const argv = buildTaskCommand({ task: 'messages', account: 'acc', live: true });
+  const opts = parseDaemonArgs(argv);
+  assert.equal(opts.task, 'messages');
+  assert.equal(opts.replyAuto, true, 'live messages → авто-отправка включена');
+  assert.equal(opts.dryRun, false, 'live → dry-run выключен');
+});
+
+test('buildTaskCommand → parseDaemonArgs: dry-run messages даёт replyAuto:false и dryRun:true', () => {
+  const argv = buildTaskCommand({ task: 'messages', account: 'acc' });
+  const opts = parseDaemonArgs(argv);
+  assert.equal(opts.task, 'messages');
+  assert.equal(opts.replyAuto, false, 'dry-run messages → авто-отправка выключена');
+  assert.equal(opts.dryRun, true, 'дефолт dry-run');
 });
 
 // ============================================================
