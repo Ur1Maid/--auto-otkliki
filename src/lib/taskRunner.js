@@ -18,6 +18,7 @@ import path from 'node:path';
 
 import { rootDir } from '../config.js';
 import { buildTaskCommand, canStart, normalizeTask } from './taskControl.js';
+import { nodeSpawnEnv } from './spawnEnv.js';
 
 const DAEMON_JS = path.join(rootDir, 'src', 'daemon.js');
 
@@ -92,7 +93,7 @@ export function createTaskRunner(deps = {}) {
     // 3. Спавн дочернего процесса. argv — массивом, без shell.
     let child;
     try {
-      child = spawnFn(execPath, [daemonPath, ...argv], { stdio: 'inherit' });
+      child = spawnFn(execPath, [daemonPath, ...argv], { stdio: 'inherit', env: nodeSpawnEnv() });
     } catch (err) {
       return { ok: false, status: 500, account, task, reason: err.message };
     }

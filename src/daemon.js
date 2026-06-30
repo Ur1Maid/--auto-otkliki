@@ -38,6 +38,7 @@ import { createDailyReport, dailyReportFileName } from './lib/dailyReport.js';
 import { evaluateAlerts } from './lib/alerts.js';
 import { processUnread } from './messages.js';
 import { createProcessedTracker } from './lib/replySend.js';
+import { nodeSpawnEnv } from './lib/spawnEnv.js';
 import { microEditResume } from './lib/resumeEdit.js';
 import { loadAccountProfile } from './lib/accountProfile.js';
 import { launchBrowser } from './browser.js';
@@ -81,7 +82,7 @@ function sleep(ms) {
  */
 function spawnNode(args) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, { stdio: 'inherit' });
+    const child = spawn(process.execPath, args, { stdio: 'inherit', env: nodeSpawnEnv() });
     child.on('close', (code) => resolve(code ?? 0));
     child.on('error', (err) => {
       console.error('[daemon] Ошибка запуска дочернего процесса:', err.message);

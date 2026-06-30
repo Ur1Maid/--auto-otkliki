@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 
+import { nodeSpawnEnv } from './lib/spawnEnv.js';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.DASHBOARD_PORT) || 8787;
@@ -36,7 +38,7 @@ function startServer() {
   const dashboard = join(here, 'dashboard.js');
   const proc = spawn(process.execPath, [dashboard, '--port', String(PORT)], {
     stdio: 'inherit',
-    env: process.env,
+    env: nodeSpawnEnv(),
   });
   proc.on('exit', () => {
     // Сервер умер — нет смысла держать окно на мёртвом порту.
