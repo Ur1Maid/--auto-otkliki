@@ -33,3 +33,13 @@ test('randomDelayMs: некорректные входы → 0', () => {
 test('randomDelayMs: min===max → ровно это значение', () => {
   assert.equal(randomDelayMs(5000, 5000, () => 0.5), 5000);
 });
+
+test('randomDelayMs: дробные секунды 0.5–3.5с (M13.2) → [500, 3500] мс', () => {
+  // 0.5·1000=500, 3.5·1000=3500 — границы целые после умножения.
+  assert.equal(randomDelayMs(0.5 * 1000, 3.5 * 1000, () => 0), 500);
+  assert.equal(randomDelayMs(0.5 * 1000, 3.5 * 1000, () => 0.999999), 3500);
+  for (let i = 0; i < 1000; i++) {
+    const v = randomDelayMs(0.5 * 1000, 3.5 * 1000);
+    assert.ok(v >= 500 && v <= 3500, `вне диапазона: ${v}`);
+  }
+});

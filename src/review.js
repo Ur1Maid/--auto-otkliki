@@ -48,8 +48,8 @@ const DEFAULT_RELEVANCE_MIN_SCORE = 65;
 const DEFAULT_RESUME_SKILLS_LIMIT = 30;
 // Анти-бот-пейсинг: рандомная пауза между откликами (сек). Применяется только
 // в боевом режиме (не в --dry-run). Настраивается через --min-delay / --max-delay.
-const DEFAULT_MIN_DELAY_SEC = 2;
-const DEFAULT_MAX_DELAY_SEC = 7;
+const DEFAULT_MIN_DELAY_SEC = 0.5;
+const DEFAULT_MAX_DELAY_SEC = 3.5;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
@@ -1842,7 +1842,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       if (!args.dryRun && index < vacancies.length - 1) {
         const waitMs = randomDelayMs(args.minDelaySec * 1000, args.maxDelaySec * 1000);
         if (waitMs > 0) {
-          console.log(`[${account}] Пауза ${Math.round(waitMs / 1000)}с (антибот)…`);
+          console.log(`[${account}] Пауза ${(waitMs / 1000).toFixed(1)}с (антибот)…`);
           await page.waitForTimeout(waitMs).catch(() => {});
         }
       }
