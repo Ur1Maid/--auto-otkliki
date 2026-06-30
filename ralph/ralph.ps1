@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Ralph — автономный цикл Claude Code для hh-auto-otkliki.
   Каждую итерацию запускает headless `claude` с ralph/PROMPT.md: агент берёт одну задачу из
