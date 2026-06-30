@@ -25,9 +25,17 @@ import { generateReply } from './lib/replyGenerate.js';
 import { sendReply, createProcessedTracker } from './lib/replySend.js';
 import { runIsolated } from './lib/isolate.js';
 import { randomDelayMs } from './lib/pacing.js';
+import { withTimeout } from './lib/withTimeout.js';
 
 /** Страница чата кандидата. Современный hh.ru рендерит chatik ИНЛАЙН здесь (не в iframe). */
 export const CHAT_URL = 'https://hh.ru/chat';
+
+/**
+ * Таймаут на открытие chatik-фрейма (M16.4). getChatFrame делает быстрые isVisible-проверки,
+ * но если страница/фрейм подвисли (нет ответа hh.ru), без гарда processUnread зависнет навсегда.
+ * При превышении → frame=null → штатная ветка «Чат не найден» (graceful-стоп шага).
+ */
+const GET_CHAT_FRAME_TIMEOUT_MS = 20000;
 
 /**
  * Возвращает Playwright frame/page, в котором живёт chatik.
@@ -155,8 +163,8 @@ export async function processUnread(page, opts = {}) {
   await page.goto(CHAT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await page.waitForTimeout(2000).catch(() => {});
 
-  // 1. Получаем frame чата.
-  const frame = await getChatFrame(page);
+  // 1. Получаем frame чата (под таймаут-гардом — фрейм не должен висеть вечно, M16.4).
+  const frame = await withTimeout(getChatFrame(page), GET_CHAT_FRAME_TIMEOUT_MS, null);
   if (!frame) {
     console.log('[messages] Чат не найден, пропускаем обработку сообщений');
     return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0 };

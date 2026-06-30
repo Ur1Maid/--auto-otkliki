@@ -38,7 +38,8 @@ import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTO
 import { createRunSummary } from './lib/runSummary.js';
 import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
-import { RUN_PHASES, classifyErrorReason } from './lib/runPhase.js';
+import { RUN_PHASES, ERROR_REASONS, classifyErrorReason } from './lib/runPhase.js';
+import { withTimeout } from './lib/withTimeout.js';
 
 
 const DEFAULT_LIMIT = 200;
@@ -51,6 +52,12 @@ const DEFAULT_RESUME_SKILLS_LIMIT = 30;
 // в боевом режиме (не в --dry-run). Настраивается через --min-delay / --max-delay.
 const DEFAULT_MIN_DELAY_SEC = 0.5;
 const DEFAULT_MAX_DELAY_SEC = 3.5;
+// Таймаут-гард на сбор вакансий (M16.4): навигация/пагинация поиска не должна висеть
+// вечно (боль M16 — apply застревал на фазе collecting). Бюджет щедрый — легитимный
+// сбор пула (до ~10 страниц по 100) укладывается; превышение → graceful-стоп шага.
+const COLLECT_VACANCIES_TIMEOUT_MS = 180000;
+// Уникальный сентинел таймаута сбора — отличим от любого валидного результата collect.
+const COLLECT_TIMEOUT = Symbol('collect-timeout');
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
@@ -1759,7 +1766,27 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       state: 'ok',
       ts: new Date(),
     });
-    const { urls: vacancies, remoteSet } = await collectVacanciesForAccount(page, args, account);
+    // Таймаут-гард (M16.4): сбор не должен висеть вечно. При превышении — error-хартбит
+    // (причина — литерал 'timeout', без PII/URL) и graceful-выход; finally закроет браузер.
+    const collected = await withTimeout(
+      collectVacanciesForAccount(page, args, account),
+      COLLECT_VACANCIES_TIMEOUT_MS,
+      COLLECT_TIMEOUT,
+    );
+    if (collected === COLLECT_TIMEOUT) {
+      console.log(`[${account}] Сбор вакансий превысил таймаут — шаг остановлен.`);
+      await writeHeartbeatFile(account, {
+        task: 'apply',
+        phase: RUN_PHASES.ERROR,
+        index: 0,
+        total: null,
+        lastEvent: ERROR_REASONS.TIMEOUT,
+        state: 'ok',
+        ts: new Date(),
+      });
+      return;
+    }
+    const { urls: vacancies, remoteSet } = collected;
 
     if (vacancies.length === 0) {
       console.log(`[${account}] Не нашел вакансии. Добавьте ссылки в input/vacancies.txt или передайте --search/--text.`);
