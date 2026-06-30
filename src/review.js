@@ -40,6 +40,7 @@ import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSugges
 import { writeHeartbeatFile } from './lib/statusWriter.js';
 import { RUN_PHASES, ERROR_REASONS, classifyErrorReason } from './lib/runPhase.js';
 import { withTimeout } from './lib/withTimeout.js';
+import { buildRunCounters } from './lib/runCounters.js';
 
 
 const DEFAULT_LIMIT = 200;
@@ -1754,6 +1755,8 @@ async function processAccount(account, args, sharedDeepSeekContext) {
   const resumeHash = hashResume(deepSeekContext.resume);
   const { browser, page } = await launchBrowser({ account, useSavedSession: true });
   const summary = createRunSummary();
+  // Снимок счётчиков текущего прогона для панели «Сейчас» (M17.3) — только числа, без PII.
+  const runCounts = () => buildRunCounters({ summary: summary.snapshot(), tokens: runUsageCounter.liveSnapshot() });
 
   try {
     // Хартбит сбора: панель «Сейчас» видит «собирает вакансии» ещё до появления пула (M12.1).
@@ -1765,6 +1768,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       lastEvent: 'collecting',
       state: 'ok',
       ts: new Date(),
+      counts: runCounts(),
     });
     // Таймаут-гард (M16.4): сбор не должен висеть вечно. При превышении — error-хартбит
     // (причина — литерал 'timeout', без PII/URL) и graceful-выход; finally закроет браузер.
@@ -1783,6 +1787,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
         lastEvent: ERROR_REASONS.TIMEOUT,
         state: 'ok',
         ts: new Date(),
+        counts: runCounts(),
       });
       return;
     }
@@ -1808,6 +1813,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       lastEvent: 'collected',
       state: 'ok',
       ts: new Date(),
+      counts: runCounts(),
     });
     for (let index = 0; index < vacancies.length; index += 1) {
       const url = vacancies[index];
@@ -1825,6 +1831,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           lastEvent: phase,
           state: 'ok',
           ts: new Date(),
+          counts: runCounts(),
         });
       };
 
@@ -1857,6 +1864,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
             lastEvent: 'limit_reached',
             state: 'limit',
             ts: new Date(),
+            counts: runCounts(),
           });
           break;
         }
@@ -1870,6 +1878,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           lastEvent: result.status,
           state: 'ok',
           ts: new Date(),
+          counts: runCounts(),
         });
         if (result.status === 'quit') break;
         // Считаем удалённые «отклики» (в dry-run — «откликнулся бы») для итогового лога.
@@ -1899,6 +1908,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           lastEvent: classifyErrorReason(error),
           state: 'ok',
           ts: new Date(),
+          counts: runCounts(),
         });
       }
 
@@ -1945,6 +1955,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       lastEvent: 'finished',
       state: 'ok',
       ts: new Date(),
+      counts: runCounts(),
     });
   } finally {
     await saveCache(scoreCachePath, scoreCache);

@@ -154,3 +154,46 @@ test('isStale: невалидный now → TypeError', () => {
   assert.throws(() => isStale(hb, 'не дата', 120000), TypeError);
   assert.throws(() => isStale(hb, null, 120000), TypeError);
 });
+
+// --- buildHeartbeat: counts (M17.3) ---
+
+test('buildHeartbeat: counts passthrough — buildRunCounters-форма сохраняется', () => {
+  const input = {
+    viewed: 10, sent: 5, skipped: 3, manual: 1, alreadyApplied: 2, errors: 0,
+    tokens: { calls: 7, promptTokens: 100, completionTokens: 50, totalTokens: 150, cacheHitTokens: 20, estimatedCostUsd: 0.01 },
+  };
+  const hb = buildHeartbeat({ task: 'apply', account: 'acc', ts: NOW, counts: input });
+  assert.ok('counts' in hb, 'counts присутствует');
+  assert.deepEqual(hb.counts, {
+    viewed: 10, sent: 5, skipped: 3, manual: 1, alreadyApplied: 2, errors: 0,
+    tokens: { calls: 7, promptTokens: 100, completionTokens: 50, totalTokens: 150, cacheHitTokens: 20, estimatedCostUsd: 0.01 },
+  });
+});
+
+test('buildHeartbeat: counts PII/whitelist — лишние ключи отбрасываются', () => {
+  const input = { viewed: 1, secret: 'pii', tokens: { calls: 2, evil: 'x' } };
+  const hb = buildHeartbeat({ counts: input });
+  assert.ok('counts' in hb, 'counts присутствует');
+  assert.equal('secret' in hb.counts, false, 'лишний ключ secret отброшен');
+  assert.equal(hb.counts.viewed, 1);
+  assert.equal(hb.counts.sent, 0);
+  assert.equal(hb.counts.tokens.calls, 2);
+  assert.equal('evil' in hb.counts.tokens, false, 'лишний ключ evil в tokens отброшен');
+});
+
+test('buildHeartbeat: counts не-plain-объект → поле counts отсутствует', () => {
+  assert.equal('counts' in buildHeartbeat({ counts: null }), false);
+  assert.equal('counts' in buildHeartbeat({ counts: [1, 2, 3] }), false);
+  assert.equal('counts' in buildHeartbeat({ counts: 'строка' }), false);
+  assert.equal('counts' in buildHeartbeat({ counts: 42 }), false);
+  assert.equal('counts' in buildHeartbeat({}), false);
+});
+
+test('buildHeartbeat: counts не-конечные числовые поля приводятся к 0', () => {
+  const hb = buildHeartbeat({ counts: { viewed: NaN, sent: Infinity, skipped: null, tokens: { calls: undefined } } });
+  assert.ok('counts' in hb);
+  assert.equal(hb.counts.viewed, 0);
+  assert.equal(hb.counts.sent, 0);
+  assert.equal(hb.counts.skipped, 0);
+  assert.equal(hb.counts.tokens.calls, 0);
+});

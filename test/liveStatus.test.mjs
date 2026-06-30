@@ -236,3 +236,35 @@ test('buildLiveView: один хартбит на аккаунт → tasks.lengt
   assert.equal(solo.task, 'apply');
   assert.equal(solo.progressPct, 25); // 5/20
 });
+
+// --- counts passthrough (M17.3) ---
+
+test('buildLiveView: хартбит с counts → снимок аккаунта и tasks[0] содержат counts', () => {
+  const counts = {
+    viewed: 10, sent: 5, skipped: 3, manual: 1, alreadyApplied: 2, errors: 0,
+    tokens: { calls: 7, promptTokens: 100, completionTokens: 50, totalTokens: 150, cacheHitTokens: 20, estimatedCostUsd: 0.01 },
+  };
+  const view = buildLiveView({
+    heartbeats: [{ account: 'acc', task: 'apply', phase: 'scoring', ts: iso(NOW - 500), counts }],
+    now: NOW,
+  });
+  const acc = view.accounts[0];
+  // Верхнеуровневый представитель несёт counts.
+  assert.deepEqual(acc.counts, counts);
+  // tasks[0] тоже несёт counts.
+  assert.deepEqual(acc.tasks[0].counts, counts);
+});
+
+test('buildLiveView: хартбит без counts → counts === null', () => {
+  const view = buildLiveView({
+    heartbeats: [{ account: 'acc', task: 'apply', ts: iso(NOW - 500) }],
+    now: NOW,
+  });
+  assert.equal(view.accounts[0].counts, null);
+  assert.equal(view.accounts[0].tasks[0].counts, null);
+});
+
+test('buildLiveView: null heartbeat (idle аккаунт) → counts === null', () => {
+  const view = buildLiveView({ accounts: ['idle-acc'], now: NOW });
+  assert.equal(view.accounts[0].counts, null);
+});

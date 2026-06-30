@@ -100,6 +100,7 @@ function sanitizeEvent(entry) {
 /**
  * Строит снимок одной задачи аккаунта для блока «Сейчас» (без recentEvents — они на уровне аккаунта).
  * При heartbeat === null возвращает idle-снимок (нет живого сигнала для данной задачи).
+ * Поле `counts` пробрасывается из хартбита как есть (уже санитизировано buildHeartbeat), null если нет.
  *
  * @param {string} account — имя аккаунта
  * @param {object|null} heartbeat — хартбит задачи (или null)
@@ -132,6 +133,7 @@ function buildLiveTask(account, heartbeat, opts) {
     ts: hb ? toIso(hb.ts) : null,
     ageMs,
     liveness: accountLiveness(hb, opts),
+    counts: hb && hb.counts && typeof hb.counts === 'object' ? hb.counts : null,
   };
 }
 

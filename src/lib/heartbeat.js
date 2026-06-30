@@ -5,6 +5,7 @@
 //
 // БЕЗОПАСНОСТЬ: хартбит несёт ТОЛЬКО числа/шаги/счётчики — ни ключа, ни PII, ни текста писем.
 // Этот модуль лишь нормализует типы; вызывающий обязан не передавать в lastEvent чувствительное.
+// Поле `counts` — белый список числовых ключей buildRunCounters; неизвестные ключи отбрасываются.
 //
 // Использование:
 //   const hb = buildHeartbeat({ task: 'apply', account: 'acc1', phase: 'scoring',
@@ -25,6 +26,45 @@ const DEFAULT_STATE = 'ok';
  */
 function toStr(value) {
   return typeof value === 'string' ? value : '';
+}
+
+/** Конечное число → как есть, иначе 0. Используется в toCounts для счётчиков прогона. */
+function toNum(v) {
+  return Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * Принимает объект счётчиков прогона (buildRunCounters-совместимой формы) и возвращает
+ * нормализованную копию с ТОЛЬКО белым списком числовых ключей.
+ * Неизвестные ключи и любые нечисловые поля отбрасываются — гарантия защиты от протекания PII.
+ * Не-plain-объект (null / массив / примитив) → null (поле не добавляется в хартбит).
+ *
+ * @param {unknown} value
+ * @returns {{ viewed:number, sent:number, skipped:number, manual:number, alreadyApplied:number,
+ *   errors:number, tokens:{ calls:number, promptTokens:number, completionTokens:number,
+ *   totalTokens:number, cacheHitTokens:number, estimatedCostUsd:number } } | null}
+ */
+function toCounts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const t = value.tokens && typeof value.tokens === 'object' && !Array.isArray(value.tokens)
+    ? value.tokens
+    : {};
+  return {
+    viewed:        toNum(value.viewed),
+    sent:          toNum(value.sent),
+    skipped:       toNum(value.skipped),
+    manual:        toNum(value.manual),
+    alreadyApplied: toNum(value.alreadyApplied),
+    errors:        toNum(value.errors),
+    tokens: {
+      calls:             toNum(t.calls),
+      promptTokens:      toNum(t.promptTokens),
+      completionTokens:  toNum(t.completionTokens),
+      totalTokens:       toNum(t.totalTokens),
+      cacheHitTokens:    toNum(t.cacheHitTokens),
+      estimatedCostUsd:  toNum(t.estimatedCostUsd),
+    },
+  };
 }
 
 /**
@@ -85,17 +125,21 @@ function toMs(value) {
  * @param {string} [fields.lastEvent] — короткая метка последнего события (без PII)
  * @param {string} [fields.state]     — состояние ('ok' | 'captcha' | 'stalled'); дефолт 'ok'
  * @param {Date|number|string} [fields.ts] — момент записи (Date / epoch ms / ISO); невалид → null
+ * @param {object} [fields.counts] — снимок счётчиков прогона (buildRunCounters-форма);
+ *   санитизируется: только числовые ключи белого списка, неизвестные отбрасываются.
+ *   Отсутствует в возвращаемом объекте, если не передано или не plain-object.
  * @returns {{
  *   task: string, account: string, phase: string,
  *   index: number|null, total: number|null,
  *   lastEvent: string, state: string, ts: string|null,
+ *   counts?: object,
  * }}
  */
 export function buildHeartbeat(fields) {
   const f = fields && typeof fields === 'object' ? fields : {};
   const state = typeof f.state === 'string' && f.state.trim() !== '' ? f.state : DEFAULT_STATE;
 
-  return {
+  const hb = {
     task: toStr(f.task),
     account: toStr(f.account),
     phase: toStr(f.phase),
@@ -105,6 +149,9 @@ export function buildHeartbeat(fields) {
     state,
     ts: toIso(f.ts),
   };
+  const counts = toCounts(f.counts);
+  if (counts) hb.counts = counts;
+  return hb;
 }
 
 /**

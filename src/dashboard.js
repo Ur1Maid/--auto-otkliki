@@ -447,6 +447,7 @@ const PAGE = `<!doctype html>
   .live-bar > i { display: block; height: 100%; background: #4cafef; }
   .live-meta { font-size: 12px; color: #8a8f98; }
   .live-events { font-size: 11px; color: #8a8f98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+  .live-counts { flex-basis: 100%; font-size: 12px; color: #c8ccd4; }
   details.history { margin-top: 8px; border: 1px solid #242832; border-radius: 10px; background: #14161c; }
   details.history > summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 600; color: #c8ccd4; user-select: none; list-style: none; }
   details.history > summary::-webkit-details-marker { display: none; }
@@ -731,6 +732,14 @@ function renderLive(v) {
     const pct = a.progressPct != null ? a.progressPct : 0;
     const events = (a.recentEvents || []).map(e => esc(e.status)).join(', ');
     const livCls = live === 'working' ? 'run' : live === 'idle' ? 'idle' : 'stop';
+    const c = a.counts;
+    const countsTxt = c
+      ? 'отпр. ' + esc(c.sent) + ' · пропущ. ' + esc(c.skipped) + ' · уже ' + esc(c.alreadyApplied) +
+        ' · ручн. ' + esc(c.manual) + ' · ошиб. ' + esc(c.errors) + ' · просм. ' + esc(c.viewed) +
+        ' · токены ' + esc((c.tokens && c.tokens.totalTokens) || 0) +
+        ' (вызовов ' + esc((c.tokens && c.tokens.calls) || 0) +
+        ', ≈$' + Number((c.tokens && c.tokens.estimatedCostUsd) || 0).toFixed(2) + ')'
+      : '';
     return '<div class="live-row">' +
       '<div class="live-acc"><span class="live-dot lv-' + esc(live) + '"></span>' + esc(a.account) + '</div>' +
       '<div class="live-task">' + (taskTxt || '<span class="muted">простаивает</span>') +
@@ -738,6 +747,7 @@ function renderLive(v) {
       '<div class="live-bar"><i style="width:' + pct + '%"></i></div>' +
       '<div class="live-meta">' + fmtAge(a.ageMs) + '</div>' +
       '<div class="live-events">' + (events || '—') + '</div>' +
+      (countsTxt ? '<div class="live-counts">' + countsTxt + '</div>' : '') +
       '</div>';
   }).join('');
 }
