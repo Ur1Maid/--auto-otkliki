@@ -30,8 +30,91 @@ import {
   computeFunnel,
   aggregateAlerts,
 } from './lib/metrics.js';
+import { createTaskRunner } from './lib/taskRunner.js';
 
 const DEFAULT_PORT = 8787;
+
+// Максимальный размер тела POST-запроса (управление). Сервер слушает только loopback,
+// но всё равно ограничиваем — защита от случайного раздувания.
+const MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * Читает тело запроса и парсит JSON. Бросает на превышении лимита/битом JSON.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {Promise<object>}
+ */
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let aborted = false;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      if (aborted) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        aborted = true;
+        reject(new Error('Тело запроса слишком большое'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
+      if (!raw) return resolve({});
+      try {
+        const obj = JSON.parse(raw);
+        resolve(obj && typeof obj === 'object' ? obj : {});
+      } catch {
+        reject(new Error('Некорректный JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/** Отправляет JSON-ответ с кодом status. */
+function sendJson(res, status, payload) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
+}
+
+/** Извлекает hostname из заголовка Host (срезает порт, разворачивает IPv6 [::1]). */
+function hostnameOf(hostHeader) {
+  const h = String(hostHeader == null ? '' : hostHeader).trim().toLowerCase();
+  if (!h) return '';
+  if (h.startsWith('[')) return h.slice(1, h.indexOf(']')); // [::1]:port → ::1
+  return h.split(':')[0];
+}
+
+/** true, если hostname — петлевой (loopback). */
+function isLoopbackHostname(name) {
+  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+}
+
+/**
+ * Защита управляющих эндпоинтов от DNS-rebinding и cross-origin POST: сервер слушает
+ * только 127.0.0.1, но локальная веб-страница в браузере оператора всё равно может
+ * выстрелить fetch на 127.0.0.1 и запустить live-задачу. Поэтому требуем, чтобы Host был
+ * петлевым И (если заголовок Origin присутствует) был тоже петлевым/же-origin.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {boolean}
+ */
+export function isLoopbackRequest(req) {
+  const headers = (req && req.headers) || {};
+  if (!isLoopbackHostname(hostnameOf(headers.host))) return false;
+
+  const origin = headers.origin;
+  // Нет Origin (не-браузерный клиент / same-origin navigation) — допускаем.
+  if (origin == null || origin === '') return true;
+  try {
+    return isLoopbackHostname(hostnameOf(new URL(origin).host));
+  } catch {
+    return false; // непарсимый Origin — отклоняем
+  }
+}
 
 /** Парсит --port из argv (по умолчанию 8787). */
 export function parsePort(argv) {
@@ -263,10 +346,72 @@ load();
 </body>
 </html>`;
 
-/** Создаёт http-сервер (не слушает — для тестов). */
-export function createServer() {
+/**
+ * Создаёт http-сервер (не слушает — для тестов).
+ *
+ * @param {{ runner?: object }} [deps] — реестр задач (инъекция для тестов).
+ *   По умолчанию каждый сервер получает свой createTaskRunner().
+ * @returns {import('node:http').Server}
+ */
+export function createServer(deps = {}) {
+  // Свой реестр на сервер: одна задача на аккаунт, трекинг PID (M11.8).
+  const runner = deps.runner || createTaskRunner();
+
   return http.createServer(async (req, res) => {
     try {
+      // --- Управление задачами (start/stop/tasks) ---
+      // Защита: эти эндпоинты ЗАПУСКАЮТ действия наружу → пускаем только петлевые запросы
+      // (защита от cross-origin POST из браузера оператора и DNS-rebinding).
+      const isControl =
+        req.url === '/api/start' || req.url === '/api/stop' || req.url === '/api/tasks';
+      if (isControl && !isLoopbackRequest(req)) {
+        sendJson(res, 403, { ok: false, error: 'Запрос отклонён: разрешён только localhost' });
+        return;
+      }
+
+      // --- Управление задачами (POST) ---
+      if (req.method === 'POST' && req.url === '/api/start') {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          sendJson(res, 400, { ok: false, error: err.message });
+          return;
+        }
+        // live — строго булев opt-in; дефолт dry-run. limit/text/area только для apply.
+        const result = runner.start({
+          task: body.task,
+          account: body.account,
+          live: body.live === true,
+          limit: body.limit,
+          text: body.text,
+          area: body.area,
+        });
+        const { status, ...rest } = result;
+        sendJson(res, status || (result.ok ? 200 : 400), rest);
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/api/stop') {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          sendJson(res, 400, { ok: false, error: err.message });
+          return;
+        }
+        const result = runner.stop({ account: body.account });
+        const { status, ...rest } = result;
+        sendJson(res, status || (result.ok ? 200 : 400), rest);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url === '/api/tasks') {
+        sendJson(res, 200, { tasks: runner.list() });
+        return;
+      }
+
+      // --- Метрики и страница (GET) ---
       if (req.url === '/api/metrics') {
         const data = await collectMetrics();
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
