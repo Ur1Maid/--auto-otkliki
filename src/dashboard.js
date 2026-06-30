@@ -359,12 +359,17 @@ const PAGE = `<!doctype html>
   .live-bar > i { display: block; height: 100%; background: #4cafef; }
   .live-meta { font-size: 12px; color: #8a8f98; }
   .live-events { font-size: 11px; color: #8a8f98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+  details.history { margin-top: 8px; border: 1px solid #242832; border-radius: 10px; background: #14161c; }
+  details.history > summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 600; color: #c8ccd4; user-select: none; list-style: none; }
+  details.history > summary::-webkit-details-marker { display: none; }
+  details.history > summary::before { content: '▸ '; color: #8a8f98; }
+  details.history[open] > summary::before { content: '▾ '; }
+  details.history > .history-body { padding: 0 16px 16px; }
 </style>
 </head>
 <body>
-  <h1>hh-auto-otkliki — панель метрик</h1>
-  <div class="sub">Локально, только чтение логов. <span id="gen"></span> <button onclick="load()">Обновить</button></div>
-  <div class="cards" id="cards"></div>
+  <h1>hh-auto-otkliki — панель управления</h1>
+  <div class="sub">Локально (127.0.0.1). Фокус — текущий прогон: что программа делает сейчас. Агрегаты за всю историю — в блоке «История» ниже.</div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Управление задачами</h2>
     <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме. Дефолт — <b>dry-run</b> (без действий наружу); тумблер Live включает реальные действия (требует подтверждения). Одна задача на аккаунт.</div>
@@ -382,15 +387,22 @@ const PAGE = `<!doctype html>
     <div id="liveRes" class="muted" style="margin-bottom: 10px"></div>
     <div id="liveBody" class="muted">Загрузка…</div>
   </div>
-  <div class="grid">
-    <div class="panel"><h2>Отклики по дням</h2><canvas id="byDay"></canvas></div>
-    <div class="panel"><h2>Отклики по статусу</h2><canvas id="byStatus"></canvas></div>
-    <div class="panel"><h2>Отклики по аккаунтам</h2><canvas id="byAccount"></canvas></div>
-    <div class="panel"><h2>Воронка конверсии</h2><canvas id="funnel"></canvas></div>
-    <div class="panel"><h2>Скоринг (локально / модель / кэш)</h2><canvas id="scoring"></canvas></div>
-    <div class="panel"><h2>Сообщения по дням</h2><canvas id="messages"></canvas></div>
-    <div class="panel" style="grid-column: 1 / -1"><h2>Алерты демона (последние)</h2><div id="alertsList"></div></div>
-  </div>
+  <details class="history" id="historyBlock">
+    <summary>История за всё время (агрегаты, графики)</summary>
+    <div class="history-body">
+      <div class="sub">Накопительная статистика за всю историю логов. <span id="gen"></span> <button onclick="load()">Обновить</button></div>
+      <div class="cards" id="cards"></div>
+      <div class="grid">
+        <div class="panel"><h2>Отклики по дням</h2><canvas id="byDay"></canvas></div>
+        <div class="panel"><h2>Отклики по статусу</h2><canvas id="byStatus"></canvas></div>
+        <div class="panel"><h2>Отклики по аккаунтам</h2><canvas id="byAccount"></canvas></div>
+        <div class="panel"><h2>Воронка конверсии</h2><canvas id="funnel"></canvas></div>
+        <div class="panel"><h2>Скоринг (локально / модель / кэш)</h2><canvas id="scoring"></canvas></div>
+        <div class="panel"><h2>Сообщения по дням</h2><canvas id="messages"></canvas></div>
+        <div class="panel" style="grid-column: 1 / -1"><h2>Алерты демона (последние)</h2><div id="alertsList"></div></div>
+      </div>
+    </div>
+  </details>
 <script>
 const charts = {};
 function chart(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new Chart(document.getElementById(id), cfg); }
@@ -409,10 +421,20 @@ function renderAlerts(a) {
 }
 let lastMetrics = null; // снимок /api/metrics для блока «Сейчас» (токены/стоимость).
 async function load() {
+  // Метрики тянем всегда (нужны блоку «Сейчас» для токенов/стоимости), но тяжёлые
+  // карточки/графики истории рисуем только когда блок «История» раскрыт: Chart.js в
+  // свёрнутом <details> рендерится с нулевым размером.
   let m;
   try { m = await (await fetch('/api/metrics')).json(); }
-  catch (e) { document.getElementById('cards').innerHTML = '<div class="card err">Ошибка загрузки</div>'; return; }
+  catch (e) { lastMetrics = null; const c = document.getElementById('cards'); if (c) c.innerHTML = '<div class="card err">Ошибка загрузки</div>'; return; }
   lastMetrics = m;
+  const hist = document.getElementById('historyBlock');
+  if (hist && hist.open) renderHistory();
+}
+
+function renderHistory() {
+  const m = lastMetrics;
+  if (!m) return;
   document.getElementById('gen').textContent = 'обновлено ' + new Date(m.generatedAt).toLocaleString('ru');
 
   const conv = m.funnel.conversionPct.toFixed(1) + '%';
@@ -623,6 +645,12 @@ async function loadLive() {
       '</div>';
   }).join('');
 }
+
+// Раскрытие «Истории» — дорисовать графики из уже загруженного снимка (или дотянуть).
+const historyBlock = document.getElementById('historyBlock');
+if (historyBlock) historyBlock.addEventListener('toggle', () => {
+  if (historyBlock.open) { if (lastMetrics) renderHistory(); else load(); }
+});
 
 load();
 loadControl();
