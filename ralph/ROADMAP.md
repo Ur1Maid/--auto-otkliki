@@ -212,7 +212,7 @@ hh.ru блокирует отклики при достижении дневно
 - [x] (M14.2) Детект лимита в `reviewVacancy`: перед/после клика отклика проверить текст страницы через `isLimitReached`; при совпадении → результат `status='limit_reached'`, heartbeat `state='limit'`, цикл прерывается gracefully (`break`, не бросает; finally закрывает браузер). Untrusted текст страницы только `.test()`-матчится, наружу не эхо-ится (prompt-injection-safe). Тест на фикстуре/мок-результате. — Acceptance: `npm test` зелёный; при лимите прогон останавливается, heartbeat несёт `state='limit'`.
 - [x] (M14.3) UI-badge: `accountLiveness` (liveStatus.js) распознаёт `state='limit'` → новый литерал `LIVENESS_LIMIT='limit'` (приоритет рядом с captcha); `formatPhase` (runPhase.js) → `phaseLabel='Лимит откликов'` при `state==='limit'`; dashboard.js рендерит оранжевый badge (класс `lv-limit`/`st-stop`-стиль). Тесты `formatPhase` + `accountLiveness` на `state='limit'`. — Acceptance: при `state='limit'` панель «Сейчас» показывает метку «Лимит откликов».
 
-## M15 — Electron десктоп-приложение ▶ ACTIVE
+## M15 — Electron десктоп-приложение ▶ DONE
 Обернуть существующий Node.js сервер в Electron: `BrowserWindow` открывает `http://127.0.0.1:8787`,
 tray-иконка, автозапуск сервера. Бэкенд (`dashboard.js`, `daemon.js`, `review.js`) не меняется.
 Новая зависимость `electron` — только devDependency, не меняет production-поведение CLI.
@@ -220,5 +220,5 @@ tray-иконка, автозапуск сервера. Бэкенд (`dashboard
 добавляем** — вся автоматизация (Playwright), DeepSeek-клиент и ~1123 теста остаются на Node.
 
 - [x] (M15.1) `npm install --save-dev electron`; `src/electron-main.js`: запускает дочерний процесс `node src/dashboard.js`, ждёт порт, создаёт `BrowserWindow` 1280×800 с `http://127.0.0.1:8787`; при закрытии окна — завершает дочерний процесс. `package.json` script `"electron": "electron src/electron-main.js"`. `node --check src/electron-main.js` ок. — Acceptance: `npm run electron` открывает окно с панелью.
-- [ ] (M15.2) Tray-иконка (`assets/tray.png` 16×16 PNG, нарисовать программно через `nativeImage`): меню «Открыть панель», «Стоп всех задач» (POST /api/stop по каждому аккаунту), «Выйти»; закрытие окна → скрыть в трей, не завершать приложение. — Acceptance: иконка появляется, меню работает.
-- [ ] (M15.3) Автозапуск с системой (Windows): пункт меню трея «Запускать при старте» → `app.setLoginItemSettings({openAtLogin: true/false})`; состояние persists между запусками. — Acceptance: toggle работает, `app.getLoginItemSettings().openAtLogin` отражает выбор.
+- [x] (M15.2) Tray-иконка (`assets/tray.png` 16×16 PNG, нарисовать программно через `nativeImage`): меню «Открыть панель», «Стоп всех задач» (POST /api/stop по каждому аккаунту), «Выйти»; закрытие окна → скрыть в трей, не завершать приложение. — Acceptance: иконка появляется, меню работает.
+- [x] (M15.3) Автозапуск с системой (Windows): пункт меню трея «Запускать при старте» → `app.setLoginItemSettings({openAtLogin: true/false})`; состояние persists между запусками. — Acceptance: toggle работает, `app.getLoginItemSettings().openAtLogin` отражает выбор.
