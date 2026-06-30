@@ -448,6 +448,8 @@ const PAGE = `<!doctype html>
   .live-meta { font-size: 12px; color: #8a8f98; }
   .live-events { font-size: 11px; color: #8a8f98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
   .live-counts { flex-basis: 100%; font-size: 12px; color: #c8ccd4; }
+  .live-chart-wrap { flex-basis: 100%; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .live-chart-wrap canvas { flex-shrink: 0; }
   details.history { margin-top: 8px; border: 1px solid #242832; border-radius: 10px; background: #14161c; }
   details.history > summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 600; color: #c8ccd4; user-select: none; list-style: none; }
   details.history > summary::-webkit-details-marker { display: none; }
@@ -686,6 +688,10 @@ async function stopTask(i, task) {
 // --- Блок «Сейчас» (M11.11, обновлён M12.8): живое состояние — одна строка на (аккаунт, задачу) ---
 const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', limit: 'лимит откликов', idle: 'простой' };
 const LIVE_TASK_LABEL = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
+// Реестр Chart-инстансов мини-графиков текущего прогона (M17.4).
+// Ключ: account + '__' + task. Инстансы уничтожаются перед пересборкой DOM,
+// чтобы не натекать при каждом тике SSE.
+const liveCharts = {};
 
 function fmtAge(ms) {
   if (ms == null) return '—';
@@ -721,9 +727,16 @@ function renderLive(v) {
 
   const el = document.getElementById('liveBody');
   if (!v.accounts || !v.accounts.length) {
+    // Уничтожаем старые мини-графики перед очисткой DOM (M17.4).
+    for (const key of Object.keys(liveCharts)) { liveCharts[key].destroy(); delete liveCharts[key]; }
     el.innerHTML = '<div class="muted">Нет аккаунтов / активных прогонов.</div>';
     return;
   }
+
+  // Уничтожаем старые мини-графики перед пересборкой DOM (M17.4).
+  // innerHTML= удаляет canvas-узлы, на которых они держались — без destroy() натечёт память.
+  for (const key of Object.keys(liveCharts)) { liveCharts[key].destroy(); delete liveCharts[key]; }
+
   // buildLiveView теперь возвращает одну запись на (account, task) — группируем по аккаунту (M12.8).
   el.innerHTML = v.accounts.map(a => {
     const live = a.liveness || 'idle';
@@ -740,7 +753,19 @@ function renderLive(v) {
         ' (вызовов ' + esc((c.tokens && c.tokens.calls) || 0) +
         ', ≈$' + Number((c.tokens && c.tokens.estimatedCostUsd) || 0).toFixed(2) + ')'
       : '';
-    return '<div class="live-row">' +
+    // Мини-график текущего прогона (M17.4): дограф только при наличии counts.
+    // canvas-id кодируем как «lc-» + безопасный ключ (account__task без спецсимволов).
+    const chartKey = esc(a.account) + '__' + esc(a.task || 'idle');
+    const canvasId = 'lc-' + chartKey.replace(/[^A-Za-z0-9_-]/g, '_');
+    const showChart = !!(c && (c.sent || c.skipped || c.alreadyApplied || c.errors));
+    const chartHtml = showChart
+      ? '<div class="live-chart-wrap"><canvas id="' + canvasId + '" width="80" height="80"></canvas>' +
+        '<span class="muted" style="font-size:11px">отпр.&nbsp;<b style="color:#7bd88f">' + esc(c.sent) + '</b>' +
+        '&nbsp;· пропущ.&nbsp;<b style="color:#8a8f98">' + esc(c.skipped) + '</b>' +
+        '&nbsp;· уже&nbsp;<b style="color:#4cafef">' + esc(c.alreadyApplied) + '</b>' +
+        '&nbsp;· ошиб.&nbsp;<b style="color:#ff6b6b">' + esc(c.errors) + '</b></span></div>'
+      : '';
+    return '<div class="live-row" data-chart-key="' + chartKey + '" data-canvas-id="' + canvasId + '">' +
       '<div class="live-acc"><span class="live-dot lv-' + esc(live) + '"></span>' + esc(a.account) + '</div>' +
       '<div class="live-task">' + (taskTxt || '<span class="muted">простаивает</span>') +
         phaseTxt + (taskTxt ? ' <span class="st-' + livCls + '">(' + (LIVENESS_LABEL[live] || live) + ')</span>' : '') + '</div>' +
@@ -748,8 +773,39 @@ function renderLive(v) {
       '<div class="live-meta">' + fmtAge(a.ageMs) + '</div>' +
       '<div class="live-events">' + (events || '—') + '</div>' +
       (countsTxt ? '<div class="live-counts">' + countsTxt + '</div>' : '') +
+      chartHtml +
       '</div>';
   }).join('');
+
+  // Создаём мини-графики после вставки DOM (M17.4). Один дограф на активный ряд.
+  // destroy() уже вызван выше — здесь всегда создаём новый Chart (нет утечки).
+  for (const a of v.accounts) {
+    const c = a.counts;
+    if (!c || !(c.sent || c.skipped || c.alreadyApplied || c.errors)) continue;
+    const chartKey = esc(a.account) + '__' + esc(a.task || 'idle');
+    const canvasId = 'lc-' + chartKey.replace(/[^A-Za-z0-9_-]/g, '_');
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) continue;
+    liveCharts[chartKey] = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: ['Отправлено', 'Пропущено', 'Уже отклик.', 'Ошибки'],
+        datasets: [{
+          data: [c.sent, c.skipped, c.alreadyApplied, c.errors],
+          backgroundColor: ['#7bd88f', '#8a8f98', '#4cafef', '#ff6b6b'],
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => ctx.label + ': ' + ctx.parsed } },
+        },
+        cutout: '60%',
+      },
+    });
+  }
 }
 
 // Живое обновление блока «Сейчас» через SSE (M13.3): сервер пушит снимок при
