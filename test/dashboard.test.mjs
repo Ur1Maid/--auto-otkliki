@@ -174,6 +174,16 @@ test('POST /api/stop: проксирует в runner.stop', async () => {
   assert.deepEqual(calls, [{ account: 'acc1' }]);
 });
 
+test('POST /api/stop: с task-фильтром проксирует task в runner.stop (M12.7)', async () => {
+  const calls = [];
+  const runner = { start: () => ({}), stop: (o) => { calls.push(o); return { ok: true, status: 200, account: o.account, task: o.task }; }, list: () => [] };
+  await withServer(runner, async (base) => {
+    const res = await fetch(`${base}/api/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: 'acc1', task: 'apply' }) });
+    assert.equal(res.status, 200);
+  });
+  assert.deepEqual(calls, [{ account: 'acc1', task: 'apply' }]);
+});
+
 // --- listAccounts (источник аккаунтов для блока «Управление» M11.10) ---
 const dirent = (name, isDir = true) => ({ name, isDirectory: () => isDir });
 

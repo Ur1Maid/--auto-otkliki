@@ -66,6 +66,20 @@ export function getAccountStatusPath(account = 'default') {
   return path.join(statusDir, `${normalizeAccountName(account)}.json`);
 }
 
+function normalizeStatusTask(task) {
+  return String(task || '')
+    .trim()
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export function getAccountTaskStatusPath(account = 'default', task = '') {
+  const acc = normalizeAccountName(account);
+  const t = normalizeStatusTask(task);
+  // Пустой task → файл уровня аккаунта (обратная совместимость с вызовами без задачи).
+  return path.join(statusDir, t ? `${acc}__${t}.json` : `${acc}.json`);
+}
+
 export async function ensureAppDirs() {
   await mkdir(sessionDir, { recursive: true });
   await mkdir(dataDir, { recursive: true });

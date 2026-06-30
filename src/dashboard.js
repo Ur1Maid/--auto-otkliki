@@ -372,7 +372,7 @@ const PAGE = `<!doctype html>
   <div class="sub">Локально (127.0.0.1). Фокус — текущий прогон: что программа делает сейчас. Агрегаты за всю историю — в блоке «История» ниже.</div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Управление задачами</h2>
-    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме. Дефолт — <b>dry-run</b> (без действий наружу); тумблер Live включает реальные действия (требует подтверждения). Одна задача на аккаунт.</div>
+    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. Дефолт — <b>dry-run</b>; тумблер Live включает реальные действия (требует подтверждения).</div>
     <div class="ctl-search" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
       <span class="sub">Поиск для «Отклики»:</span>
       <input id="srch-text" type="text" placeholder="text (напр. DevOps)" value="DevOps" style="flex: 1; min-width: 160px">
@@ -485,11 +485,12 @@ function renderHistory() {
 }
 function scaleOpts() { return { x: { ticks: { color: '#8a8f98' }, grid: { color: '#242832' } }, y: { ticks: { color: '#8a8f98' }, grid: { color: '#242832' } } }; }
 
-// --- Блок «Управление» (M11.10): запуск/стоп задач по аккаунтам ---
+// --- Блок «Управление» (M11.10, обновлён M12.7): запуск/стоп задач независимо по аккаунту ---
 const TASK_LABELS = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
 const TASKS = ['apply', 'messages', 'resume'];
 let controlAccounts = [];
-const controlStopped = {}; // account → true (показать «остановлено» до следующего запуска)
+// Ключ: acc+'\0'+task → true (показать «остановлено» до следующего обновления).
+const controlStopped = {};
 
 async function loadControl() {
   let accRes, taskRes;
@@ -504,54 +505,60 @@ async function loadControl() {
   }
   controlAccounts = (accRes && accRes.accounts) || [];
   const tasks = (taskRes && taskRes.tasks) || [];
-  const byAccount = {};
-  for (const t of tasks) if (t && t.account) byAccount[t.account] = t;
+  // Индекс по паре account+task — каждая задача независима (M12.7).
+  const byAccTask = {};
+  for (const t of tasks) if (t && t.account && t.task) byAccTask[t.account + '\0' + t.task] = t;
 
   const el = document.getElementById('controlBody');
   if (!controlAccounts.length) {
     el.innerHTML = '<div class="muted">Аккаунтов не найдено (config/accounts/).</div>';
     return;
   }
-  el.innerHTML = controlAccounts.map((acc, i) => {
-    const run = byAccount[acc];
-    const running = !!run;
-    let statusTxt, statusCls;
-    if (running) {
-      statusTxt = 'работает: ' + (TASK_LABELS[run.task] || esc(run.task)) +
-        (run.live ? ' · LIVE' : ' · dry-run') + (run.pid != null ? ' · pid ' + esc(run.pid) : '');
-      statusCls = 'st-run';
-    } else if (controlStopped[acc]) {
-      statusTxt = 'остановлено'; statusCls = 'st-stop';
-    } else {
-      statusTxt = 'простаивает'; statusCls = 'st-idle';
-    }
-    const btns = TASKS.map(tk =>
-      '<button data-action="start" data-idx="' + i + '" data-task="' + tk + '"' +
-      (running ? ' disabled' : '') + '>' + TASK_LABELS[tk] + '</button>'
-    ).join(' ');
-    return '<div class="ctl-row">' +
-      '<div class="ctl-acc">' + esc(acc) + '</div>' +
-      '<label class="ctl-live"><input type="checkbox" id="live-' + i + '"' + (running ? ' disabled' : '') + '> Live</label>' +
-      '<div class="ctl-btns">' + btns + '</div>' +
-      '<button class="ctl-stop" data-action="stop" data-idx="' + i + '"' + (running ? '' : ' disabled') + '>Стоп</button>' +
-      '<div class="ctl-status ' + statusCls + '">' + statusTxt + '</div>' +
-      '</div>';
-  }).join('');
+  // Per-account блок с per-task строками: каждая задача имеет свои Live/Старт/Стоп (M12.7).
+  el.innerHTML = controlAccounts.map((acc, i) =>
+    '<div style="margin-bottom: 14px; border: 1px solid #242832; border-radius: 8px; padding: 10px 12px">' +
+    '<div class="ctl-acc" style="margin-bottom: 8px">' + esc(acc) + '</div>' +
+    TASKS.map(tk => {
+      const key = acc + '\0' + tk;
+      const run = byAccTask[key];
+      const running = !!run;
+      let statusTxt, statusCls;
+      if (running) {
+        statusTxt = (run.live ? 'LIVE' : 'dry-run') + (run.pid != null ? ' · pid ' + esc(run.pid) : '');
+        statusCls = 'st-run';
+      } else if (controlStopped[key]) {
+        statusTxt = 'остановлено'; statusCls = 'st-stop';
+      } else {
+        statusTxt = 'простаивает'; statusCls = 'st-idle';
+      }
+      return '<div class="ctl-row">' +
+        '<div style="min-width: 90px; font-size: 13px">' + TASK_LABELS[tk] + '</div>' +
+        '<label class="ctl-live"><input type="checkbox" id="live-' + i + '-' + tk + '"' +
+          (running ? ' disabled' : '') + '> Live</label>' +
+        '<button data-action="start" data-idx="' + i + '" data-task="' + tk + '"' +
+          (running ? ' disabled' : '') + '>Старт</button>' +
+        '<button class="ctl-stop" data-action="stop" data-idx="' + i + '" data-task="' + tk + '"' +
+          (running ? '' : ' disabled') + '>Стоп</button>' +
+        '<div class="ctl-status ' + statusCls + '">' + statusTxt + '</div>' +
+        '</div>';
+    }).join('') +
+    '</div>'
+  ).join('');
 
   el.querySelectorAll('button[data-action="start"]').forEach(b =>
     b.addEventListener('click', () => startTask(+b.dataset.idx, b.dataset.task)));
   el.querySelectorAll('button[data-action="stop"]').forEach(b =>
-    b.addEventListener('click', () => stopTask(+b.dataset.idx)));
+    b.addEventListener('click', () => stopTask(+b.dataset.idx, b.dataset.task)));
 }
 
 async function startTask(i, task) {
   const acc = controlAccounts[i];
   if (!acc) return;
-  const cb = document.getElementById('live-' + i);
+  const cb = document.getElementById('live-' + i + '-' + task);
   const live = !!(cb && cb.checked);
   if (live && !confirm('LIVE-запуск «' + (TASK_LABELS[task] || task) + '» для аккаунта «' + acc + '».\\n' +
       'Это реальные действия наружу (отклики / ответы / правка резюме). Продолжить?')) return;
-  delete controlStopped[acc];
+  delete controlStopped[acc + '\0' + task];
   const payload = { task, account: acc, live };
   if (task === 'apply') {
     const t = (document.getElementById('srch-text').value || '').trim();
@@ -574,16 +581,16 @@ async function startTask(i, task) {
   loadControl();
 }
 
-async function stopTask(i) {
+async function stopTask(i, task) {
   const acc = controlAccounts[i];
   if (!acc) return;
   try {
     const res = await fetch('/api/stop', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: acc }),
+      body: JSON.stringify({ account: acc, task }),
     });
     const json = await res.json().catch(() => ({}));
-    if (res.ok) controlStopped[acc] = true;
+    if (res.ok) controlStopped[acc + '\0' + task] = true;
     else alert('Не удалось остановить: ' + (json.reason || res.status));
   } catch (e) {
     alert('Ошибка остановки');
@@ -591,7 +598,7 @@ async function stopTask(i) {
   loadControl();
 }
 
-// --- Блок «Сейчас» (M11.11): живое состояние прогонов ---
+// --- Блок «Сейчас» (M11.11, обновлён M12.8): живое состояние — одна строка на (аккаунт, задачу) ---
 const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', idle: 'простой' };
 const LIVE_TASK_LABEL = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
 
@@ -628,17 +635,18 @@ async function loadLive() {
     el.innerHTML = '<div class="muted">Нет аккаунтов / активных прогонов.</div>';
     return;
   }
+  // buildLiveView теперь возвращает одну запись на (account, task) — группируем по аккаунту (M12.8).
   el.innerHTML = v.accounts.map(a => {
     const live = a.liveness || 'idle';
-    const taskTxt = a.task ? (LIVE_TASK_LABEL[a.task] || esc(a.task)) : 'простаивает';
-    // phaseLabel уже несёт прогресс словами («Откликается 12/40») — в live-meta его не дублируем.
+    const taskTxt = a.task ? (LIVE_TASK_LABEL[a.task] || esc(a.task)) : '';
     const phaseTxt = a.phaseLabel ? ' · ' + esc(a.phaseLabel) : '';
     const pct = a.progressPct != null ? a.progressPct : 0;
     const events = (a.recentEvents || []).map(e => esc(e.status)).join(', ');
+    const livCls = live === 'working' ? 'run' : live === 'idle' ? 'idle' : 'stop';
     return '<div class="live-row">' +
       '<div class="live-acc"><span class="live-dot lv-' + esc(live) + '"></span>' + esc(a.account) + '</div>' +
-      '<div class="live-task">' + taskTxt + phaseTxt + ' <span class="st-' +
-        (live === 'working' ? 'run' : live === 'idle' ? 'idle' : 'stop') + '">(' + (LIVENESS_LABEL[live] || live) + ')</span></div>' +
+      '<div class="live-task">' + (taskTxt || '<span class="muted">простаивает</span>') +
+        phaseTxt + (taskTxt ? ' <span class="st-' + livCls + '">(' + (LIVENESS_LABEL[live] || live) + ')</span>' : '') + '</div>' +
       '<div class="live-bar"><i style="width:' + pct + '%"></i></div>' +
       '<div class="live-meta">' + fmtAge(a.ageMs) + '</div>' +
       '<div class="live-events">' + (events || '—') + '</div>' +
@@ -720,7 +728,10 @@ export function createServer(deps = {}) {
           sendJson(res, 400, { ok: false, error: err.message });
           return;
         }
-        const result = runner.stop({ account: body.account });
+        // task — опциональный фильтр (M12.7): при указании останавливает только эту задачу аккаунта.
+        const stopOpts = { account: body.account };
+        if (body.task !== undefined) stopOpts.task = body.task;
+        const result = runner.stop(stopOpts);
         const { status, ...rest } = result;
         sendJson(res, status || (result.ok ? 200 : 400), rest);
         return;

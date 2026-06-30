@@ -1,9 +1,14 @@
-// Чистый агрегатор «живого состояния» для блока «Сейчас» панели управления (M11.11).
+// Чистый агрегатор «живого состояния» для блока «Сейчас» панели управления (M11.11, M12.6).
 // Сводит уже прочитанные источники в снимок: по аккаунту — текущая задача/шаг/прогресс,
 // индикатор живости (работает/завис/капча/простаивает), последние события, плюс общий
 // замер ресурсов (RSS/CPU). Без IO/сети/процесса: dashboard.js читает файлы
-// (logs/status/<account>.json, logs/resources.jsonl, responses-<account>.jsonl) и передаёт
+// (logs/status/<account>__<task>.json, logs/resources.jsonl, responses-<account>.jsonl) и передаёт
 // сюда распарсенными; `now`/`withinWorkingHours` тоже инъектируются вызывающим.
+//
+// С M12.6 каждый аккаунт может иметь несколько хартбитов — по одному на задачу
+// (apply/messages/resume). Снимок аккаунта содержит массив `tasks` (один элемент на задачу,
+// отсортированы по имени). Верхнеуровневые поля (task/phase/phaseLabel/…) = самая свежая задача
+// («представитель») — обратная совместимость с UI до M12.8.
 //
 // БЕЗОПАСНОСТЬ: наружу идут только числа/статусы/шаги. События аккаунта берём как {status, at}
 // — без title/url/PII (вызывающий обязан не передавать сюда заголовки/ссылки вакансий).
@@ -90,14 +95,14 @@ function sanitizeEvent(entry) {
 }
 
 /**
- * Строит снимок одного аккаунта для блока «Сейчас».
+ * Строит снимок одной задачи аккаунта для блока «Сейчас» (без recentEvents — они на уровне аккаунта).
+ * При heartbeat === null возвращает idle-снимок (нет живого сигнала для данной задачи).
  *
  * @param {string} account — имя аккаунта
- * @param {object|null} heartbeat — хартбит этого аккаунта (или null, если файла статуса нет)
- * @param {object[]} events — события аккаунта (responses-<account>.jsonl), последние сверху
- * @param {object} opts — { now, withinWorkingHours, thresholdMs, eventsLimit }
+ * @param {object|null} heartbeat — хартбит задачи (или null)
+ * @param {object} opts — { now, withinWorkingHours, thresholdMs }
  */
-function buildLiveAccount(account, heartbeat, events, opts) {
+function buildLiveTask(account, heartbeat, opts) {
   const hb = heartbeat && typeof heartbeat === 'object' ? heartbeat : null;
   const nowMs = toMs(opts.now);
   const tsMs = hb ? toMs(hb.ts) : null;
@@ -105,16 +110,6 @@ function buildLiveAccount(account, heartbeat, events, opts) {
 
   const index = hb ? finiteOrNull(hb.index) : null;
   const total = hb ? finiteOrNull(hb.total) : null;
-
-  const limit =
-    Number.isFinite(opts.eventsLimit) && opts.eventsLimit > 0
-      ? Math.floor(opts.eventsLimit)
-      : DEFAULT_EVENTS_LIMIT;
-  const recentEvents = (Array.isArray(events) ? events : [])
-    .map(sanitizeEvent)
-    .filter(Boolean)
-    .slice(-limit)
-    .reverse();
 
   const phase = hb && typeof hb.phase === 'string' ? hb.phase : '';
   const lastEvent = hb && typeof hb.lastEvent === 'string' ? hb.lastEvent : '';
@@ -134,8 +129,71 @@ function buildLiveAccount(account, heartbeat, events, opts) {
     ts: hb ? toIso(hb.ts) : null,
     ageMs,
     liveness: accountLiveness(hb, opts),
-    recentEvents,
   };
+}
+
+// epoch-ms хартбита или -Infinity (для сравнения «свежести»; нет ts → самый старый).
+function tsRank(snapshot) {
+  const ms = toMs(snapshot && snapshot.ts);
+  return ms == null ? -Infinity : ms;
+}
+
+// Представитель аккаунта для верхнеуровневых полей (обратная совместимость UI до M12.8):
+// самая свежая задача; при равенстве ts — по имени задачи.
+function pickRepresentative(tasks) {
+  return tasks.reduce((best, t) => {
+    const tv = tsRank(t), bv = tsRank(best);
+    if (tv > bv) return t;
+    if (tv === bv && t.task.localeCompare(best.task) < 0) return t;
+    return best;
+  });
+}
+
+/**
+ * Строит снимок одного аккаунта для блока «Сейчас».
+ * Принимает МАССИВ хартбитов (по одному на задачу) — M12.6.
+ * Верхнеуровневые поля = самая свежая задача-представитель (обратная совместимость).
+ * Массив `tasks` содержит снимок каждой задачи, отсортированный по имени.
+ *
+ * @param {string} account — имя аккаунта
+ * @param {object[]} heartbeats — хартбиты этого аккаунта (могут быть с разными task)
+ * @param {object[]} events — события аккаунта (responses-<account>.jsonl), последние сверху
+ * @param {object} opts — { now, withinWorkingHours, thresholdMs, eventsLimit }
+ */
+function buildLiveAccount(account, heartbeats, events, opts) {
+  const limit =
+    Number.isFinite(opts.eventsLimit) && opts.eventsLimit > 0
+      ? Math.floor(opts.eventsLimit)
+      : DEFAULT_EVENTS_LIMIT;
+  const recentEvents = (Array.isArray(events) ? events : [])
+    .map(sanitizeEvent)
+    .filter(Boolean)
+    .slice(-limit)
+    .reverse();
+
+  // Дедупликация по task: при совпадении имён оставляем самый свежий хартбит.
+  // Это защищает от сосуществования старого <account>.json и нового <account>__apply.json.
+  const freshestByTask = new Map();
+  for (const hb of Array.isArray(heartbeats) ? heartbeats : []) {
+    if (!hb || typeof hb !== 'object') continue;
+    const t = typeof hb.task === 'string' ? hb.task : '';
+    const existing = freshestByTask.get(t);
+    if (!existing || tsRank(hb) > tsRank(existing)) {
+      freshestByTask.set(t, hb);
+    }
+  }
+
+  // Снимки задач, отсортированные по имени задачи.
+  const tasks = [...freshestByTask.values()]
+    .map((hb) => buildLiveTask(account, hb, opts))
+    .sort((a, b) => a.task.localeCompare(b.task));
+
+  // Представитель: самая свежая задача для верхнеуровневых полей (обратная совместимость).
+  const base = tasks.length > 0
+    ? pickRepresentative(tasks)
+    : buildLiveTask(account, null, opts);
+
+  return { ...base, recentEvents, tasks };
 }
 
 /**
@@ -146,7 +204,10 @@ function buildLiveAccount(account, heartbeat, events, opts) {
  *
  * @param {object} [input]
  * @param {string[]} [input.accounts] — имена аккаунтов (из listAccounts)
- * @param {object[]} [input.heartbeats] — распарсенные logs/status/<account>.json (каждый с .account)
+ * @param {object[]} [input.heartbeats] — распарсенные logs/status/<account>__<task>.json
+ *   (каждый с .account и .task); один аккаунт может иметь несколько записей — по задаче.
+ *   Снимок аккаунта несёт массив `tasks` (один на задачу); верхнеуровневые поля = свежайшая
+ *   задача-представитель (обратная совместимость с UI до M12.8).
  * @param {object[]} [input.resources] — распарсенные строки logs/resources.jsonl
  * @param {Record<string, object[]>} [input.eventsByAccount] — события по аккаунту (только {status, at})
  * @param {Date|number|string} [input.now]
@@ -168,12 +229,17 @@ export function buildLiveView(input = {}) {
     eventsLimit: input.eventsLimit,
   };
 
-  // Хартбиты по имени аккаунта (последний выигрывает при дублях).
-  const hbByAccount = new Map();
+  // Хартбиты сгруппированы по имени аккаунта (несколько на аккаунт — по одному на задачу).
+  const hbsByAccount = new Map();
   const hbList = Array.isArray(input.heartbeats) ? input.heartbeats : [];
   for (const hb of hbList) {
     if (hb && typeof hb === 'object' && typeof hb.account === 'string' && hb.account) {
-      hbByAccount.set(hb.account, hb);
+      const arr = hbsByAccount.get(hb.account);
+      if (arr) {
+        arr.push(hb);
+      } else {
+        hbsByAccount.set(hb.account, [hb]);
+      }
     }
   }
 
@@ -182,14 +248,14 @@ export function buildLiveView(input = {}) {
   for (const name of Array.isArray(input.accounts) ? input.accounts : []) {
     if (typeof name === 'string' && name) names.add(name);
   }
-  for (const name of hbByAccount.keys()) names.add(name);
+  for (const name of hbsByAccount.keys()) names.add(name);
 
   const eventsByAccount =
     input.eventsByAccount && typeof input.eventsByAccount === 'object' ? input.eventsByAccount : {};
 
   const accounts = [...names]
     .sort((a, b) => a.localeCompare(b))
-    .map((name) => buildLiveAccount(name, hbByAccount.get(name) || null, eventsByAccount[name], opts));
+    .map((name) => buildLiveAccount(name, hbsByAccount.get(name) || [], eventsByAccount[name], opts));
 
   const resList = (Array.isArray(input.resources) ? input.resources : []).filter(
     (r) => r && typeof r === 'object',

@@ -171,3 +171,56 @@ test('buildLiveView: progressPct null при total<=0 или нет данных
   assert.equal(a.progressPct, null);
   assert.equal(b.progressPct, null); // index отсутствует
 });
+
+// --- per-task heartbeats (M12.6) ---
+
+test('buildLiveView: три задачи одного аккаунта не перетирают друг друга (per-task)', () => {
+  const view = buildLiveView({
+    heartbeats: [
+      { account: 'acc', task: 'apply',    phase: 'applying', index: 3, total: 10, ts: iso(NOW - 1000) },
+      { account: 'acc', task: 'messages', phase: 'scoring',  index: 1, total: 5,  ts: iso(NOW - 2000) },
+      { account: 'acc', task: 'resume',   phase: 'collecting', index: 0, total: 1, ts: iso(NOW - 3000) },
+    ],
+    now: NOW,
+    withinWorkingHours: true,
+    thresholdMs: 120000,
+  });
+
+  // Один аккаунт в списке.
+  assert.equal(view.accounts.length, 1);
+  const acc = view.accounts[0];
+
+  // Три задачи, отсортированные по имени.
+  assert.equal(acc.tasks.length, 3);
+  assert.deepEqual(acc.tasks.map((t) => t.task), ['apply', 'messages', 'resume']);
+
+  // Каждая задача несёт собственные поля.
+  const applyTask = acc.tasks.find((t) => t.task === 'apply');
+  const messagesTask = acc.tasks.find((t) => t.task === 'messages');
+  const resumeTask = acc.tasks.find((t) => t.task === 'resume');
+  assert.equal(applyTask.phase, 'applying');
+  assert.equal(applyTask.progressPct, 30); // 3/10
+  assert.equal(messagesTask.phase, 'scoring');
+  assert.equal(messagesTask.progressPct, 20); // 1/5
+  assert.equal(resumeTask.phase, 'collecting');
+
+  // Верхнеуровневый представитель = самая свежая задача (apply, NOW-1000).
+  assert.equal(acc.task, 'apply');
+  assert.equal(acc.phase, 'applying');
+});
+
+test('buildLiveView: один хартбит на аккаунт → tasks.length === 1', () => {
+  const view = buildLiveView({
+    heartbeats: [
+      { account: 'solo', task: 'apply', phase: 'scoring', index: 5, total: 20, ts: iso(NOW - 500) },
+    ],
+    now: NOW,
+  });
+  assert.equal(view.accounts.length, 1);
+  const solo = view.accounts[0];
+  assert.equal(solo.tasks.length, 1);
+  assert.equal(solo.tasks[0].task, 'apply');
+  // Верхнеуровневые поля = единственная задача.
+  assert.equal(solo.task, 'apply');
+  assert.equal(solo.progressPct, 25); // 5/20
+});
