@@ -2,9 +2,11 @@
 // Чистый модуль (нет IO, нет сети). createUsageCounter() создаёт независимый инстанс.
 // Синглтон runUsageCounter — для реального прогона; тесты используют свои инстансы.
 
+import { estimateCost } from './metrics.js';
+
 /**
  * Создаёт независимый аккумулятор статистики DeepSeek.
- * @returns {{ record: (usage: unknown) => void, snapshot: () => object, formatSummary: () => string, reset: () => void }}
+ * @returns {{ record: (usage: unknown) => void, recordError: (status: number) => void, snapshot: () => object, liveSnapshot: (pricing?: object) => object, formatSummary: () => string, reset: () => void }}
  */
 export function createUsageCounter() {
   let calls = 0;
@@ -57,6 +59,19 @@ export function createUsageCounter() {
   }
 
   /**
+   * Публичный снимок текущего накопителя ВО ВРЕМЯ прогона (для панели управления):
+   * те же счётчики, что snapshot(), плюс оценка стоимости в USD через общий
+   * estimateCost (единый источник цен — см. metrics.js). Не завершает прогон, не
+   * мутирует состояние, никогда не бросает.
+   * @param {{ inMissPerM?: number, inHitPerM?: number, outPerM?: number }} [pricing]
+   * @returns {{ calls: number, promptTokens: number, completionTokens: number, totalTokens: number, cacheHitTokens: number, apiErrors: number, balanceExhausted: boolean, estimatedCostUsd: number }}
+   */
+  function liveSnapshot(pricing) {
+    const snap = snapshot();
+    return { ...snap, estimatedCostUsd: estimateCost(snap, pricing) };
+  }
+
+  /**
    * Возвращает короткую русскую строку-итог для вывода в конце прогона.
    * @returns {string}
    */
@@ -75,7 +90,7 @@ export function createUsageCounter() {
     balanceExhausted = false;
   }
 
-  return { record, recordError, snapshot, formatSummary, reset };
+  return { record, recordError, snapshot, liveSnapshot, formatSummary, reset };
 }
 
 // Синглтон для реального прогона. Тесты создают свои инстансы через createUsageCounter().
