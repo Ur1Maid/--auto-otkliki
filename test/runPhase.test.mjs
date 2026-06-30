@@ -163,6 +163,21 @@ test('formatPhase: error → «Ошибка: <русская причина>»',
   assert.equal(formatPhase({ phase: 'error' }), 'Ошибка: неизвестно');
 });
 
+test('ERROR_REASONS: auth/empty литералы для причин сбора (M18.3)', () => {
+  assert.equal(ERROR_REASONS.AUTH, 'auth');
+  assert.equal(ERROR_REASONS.EMPTY, 'empty');
+});
+
+test('formatPhase: auth/empty (M18.3) → понятная фраза без префикса «Ошибка:»', () => {
+  // Разлогин и пустой поиск — конкретные причины «таймаута» сбора; панель показывает
+  // их прямой фразой, а не общим «Ошибка: таймаут».
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'auth' }), 'Нужен вход в аккаунт');
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'empty' }), 'Поиск пуст');
+  // регистр/пробелы lastEvent нормализуются как у прочих причин
+  assert.equal(formatPhase({ phase: 'error', lastEvent: ' AUTH ' }), 'Нужен вход в аккаунт');
+  assert.equal(formatPhase({ phase: 'error', lastEvent: 'EMPTY' }), 'Поиск пуст');
+});
+
 test('formatPhase: captcha (state) важнее любой фазы', () => {
   assert.equal(formatPhase({ phase: 'applying', index: 5, total: 10, state: 'captcha' }), 'Капча');
   assert.equal(formatPhase({ phase: 'collecting', state: 'captcha' }), 'Капча');

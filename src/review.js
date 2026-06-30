@@ -39,6 +39,7 @@ import { createRunSummary } from './lib/runSummary.js';
 import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
 import { RUN_PHASES, ERROR_REASONS, classifyErrorReason } from './lib/runPhase.js';
+import { detectCollectProblem, COLLECT_LOGGED_OUT, COLLECT_EMPTY_SEARCH } from './lib/collectState.js';
 import { withTimeout } from './lib/withTimeout.js';
 import { buildRunCounters } from './lib/runCounters.js';
 
@@ -1778,13 +1779,26 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       COLLECT_TIMEOUT,
     );
     if (collected === COLLECT_TIMEOUT) {
+      // Общий 'timeout' СКРЫВАЕТ настоящую причину (M18.3): читаем текст/URL страницы
+      // и пробуем распознать разлогин/пустой поиск — панель покажет понятную причину.
+      // Текст страницы — untrusted: только матчится regex'ами внутри detectCollectProblem,
+      // наружу/в лог не эхо-ится (prompt-injection-safe).
+      const pageText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+      let pageUrl = '';
+      try { pageUrl = page.url(); } catch { pageUrl = ''; }
+      const problem = detectCollectProblem({ text: pageText, url: pageUrl });
+      const reason = problem === COLLECT_LOGGED_OUT
+        ? ERROR_REASONS.AUTH
+        : problem === COLLECT_EMPTY_SEARCH
+          ? ERROR_REASONS.EMPTY
+          : ERROR_REASONS.TIMEOUT;
       console.log(`[${account}] Сбор вакансий превысил таймаут — шаг остановлен.`);
       await writeHeartbeatFile(account, {
         task: 'apply',
         phase: RUN_PHASES.ERROR,
         index: 0,
         total: null,
-        lastEvent: ERROR_REASONS.TIMEOUT,
+        lastEvent: reason,
         state: 'ok',
         ts: new Date(),
         counts: runCounts(),

@@ -47,7 +47,13 @@ const DEFAULT_PHASE = RUN_PHASES.SCORING;
  *   network    — сетевая ошибка (net::ERR_…, ECONNRESET, fetch failed);
  *   detached   — узел отвалился из DOM (element is not attached / detached);
  *   closed     — браузер/страница/контекст закрыты (target closed);
+ *   auth       — разлогин/редирект на вход (M18.3, из detectCollectProblem);
+ *   empty      — пустой поиск, вакансий нет (M18.3, из detectCollectProblem);
  *   unknown    — не распознано (дефолт).
+ *
+ * `auth`/`empty` ставит не classifyErrorReason, а review.js в таймаут-ветке сбора:
+ * это конкретные причины «таймаута» сбора, которые панель показывает понятной фразой,
+ * а не общим «Ошибка: таймаут».
  */
 export const ERROR_REASONS = Object.freeze({
   TIMEOUT: 'timeout',
@@ -55,6 +61,8 @@ export const ERROR_REASONS = Object.freeze({
   NETWORK: 'network',
   DETACHED: 'detached',
   CLOSED: 'closed',
+  AUTH: 'auth',
+  EMPTY: 'empty',
   UNKNOWN: 'unknown',
 });
 
@@ -179,6 +187,10 @@ export function formatPhase(snapshot = {}) {
       return 'Готово';
     case RUN_PHASES.ERROR: {
       const reason = typeof s.lastEvent === 'string' ? s.lastEvent.trim().toLowerCase() : '';
+      // Особые причины сбора (M18.3): это не «сбой», а понятное состояние страницы —
+      // показываем прямой фразой, без префикса «Ошибка:» (пустой поиск — не ошибка).
+      if (reason === ERROR_REASONS.AUTH) return 'Нужен вход в аккаунт';
+      if (reason === ERROR_REASONS.EMPTY) return 'Поиск пуст';
       const label = REASON_LABELS[reason] || REASON_LABELS[ERROR_REASONS.UNKNOWN];
       return `Ошибка: ${label}`;
     }
