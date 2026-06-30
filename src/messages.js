@@ -137,7 +137,7 @@ export async function readThread(frame) {
  *   tracker?: { has(id: string|number): boolean, add(id: string|number): void },
  *   confirmFn?: (preview: string) => Promise<boolean>,
  * }} opts
- * @returns {Promise<{ processed: number, replied: number, skipped: number, manual: number, errors: number }>}
+ * @returns {Promise<{ processed: number, replied: number, skipped: number, manual: number, errors: number, chatFound: boolean }>}
  */
 export async function processUnread(page, opts = {}) {
   const {
@@ -167,7 +167,8 @@ export async function processUnread(page, opts = {}) {
   const frame = await withTimeout(getChatFrame(page), GET_CHAT_FRAME_TIMEOUT_MS, null);
   if (!frame) {
     console.log('[messages] Чат не найден, пропускаем обработку сообщений');
-    return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0 };
+    // chatFound=false → панель покажет понятное «Чат не найден» (M18.5), не «падение».
+    return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0, chatFound: false };
   }
 
   // 2. Список тредов. По умолчанию — только непрочитанные (дёшево). С includeRead —
@@ -296,7 +297,8 @@ export async function processUnread(page, opts = {}) {
   // Считаем ошибки из runIsolated (треды, у которых выбросило необработанное исключение).
   errors = threadResults.failed;
 
-  return { processed, replied, skipped, manual, errors };
+  // chatFound=true → исход различает «нет новых» (processed=0) и «обработано» (M18.5).
+  return { processed, replied, skipped, manual, errors, chatFound: true };
 }
 
 // Точка входа (guard — не запускается при импорте, только при прямом вызове).

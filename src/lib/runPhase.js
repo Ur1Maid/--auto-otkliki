@@ -17,6 +17,8 @@
 //   const reason = classifyErrorReason(error);      // → 'timeout' | 'navigation' | ...
 //   const phase = normalizePhase(value);            // нормализация прочитанного из файла
 
+import { isMessagesOutcome, messagesOutcomeLabel } from './messagesOutcome.js';
+
 /**
  * Канонические фазы прогона откликов. Заморожены — расширять здесь, а не строками в коде.
  *   collecting — собирает вакансии из поиска (ещё нет пула);
@@ -183,8 +185,13 @@ export function formatPhase(snapshot = {}) {
       return progress ? `Оценивает ${progress}` : 'Оценивает…';
     case RUN_PHASES.APPLYING:
       return progress ? `Откликается ${progress}` : 'Откликается…';
-    case RUN_PHASES.DONE:
+    case RUN_PHASES.DONE: {
+      // Поллинг сообщений кладёт исход в lastEvent (M18.5) — показываем его словами
+      // («Чат не найден» / «Нет новых сообщений»), иначе нейтральное «Готово».
+      const ev = typeof s.lastEvent === 'string' ? s.lastEvent.trim().toLowerCase() : '';
+      if (isMessagesOutcome(ev)) return messagesOutcomeLabel(ev);
       return 'Готово';
+    }
     case RUN_PHASES.ERROR: {
       const reason = typeof s.lastEvent === 'string' ? s.lastEvent.trim().toLowerCase() : '';
       // Особые причины сбора (M18.3): это не «сбой», а понятное состояние страницы —

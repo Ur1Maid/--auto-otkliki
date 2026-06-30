@@ -154,6 +154,14 @@ test('formatPhase: done → Готово', () => {
   assert.equal(formatPhase({ phase: 'done', index: 40, total: 40 }), 'Готово');
 });
 
+test('formatPhase: done + исход сообщений → понятная метка (M18.5)', () => {
+  assert.equal(formatPhase({ phase: 'done', lastEvent: 'chat_not_found' }), 'Чат не найден');
+  assert.equal(formatPhase({ phase: 'done', lastEvent: 'no_new' }), 'Нет новых сообщений');
+  assert.equal(formatPhase({ phase: 'done', lastEvent: 'processed' }), 'Готово');
+  // apply-done несёт lastEvent='finished' (не исход сообщений) → нейтральное «Готово»
+  assert.equal(formatPhase({ phase: 'done', lastEvent: 'finished' }), 'Готово');
+});
+
 test('formatPhase: error → «Ошибка: <русская причина>»', () => {
   assert.equal(formatPhase({ phase: 'error', lastEvent: 'timeout' }), 'Ошибка: таймаут');
   assert.equal(formatPhase({ phase: 'error', lastEvent: 'network' }), 'Ошибка: сеть');

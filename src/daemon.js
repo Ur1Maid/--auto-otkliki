@@ -46,6 +46,8 @@ import { rootDir, logsDir, getAccountSummaryPath } from './config.js';
 import { runUsageCounter } from './lib/usageCounter.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
 import { createResourceLogger } from './lib/resourceLog.js';
+import { classifyMessagesOutcome } from './lib/messagesOutcome.js';
+import { RUN_PHASES, classifyErrorReason } from './lib/runPhase.js';
 import { confirm } from './prompts.js';
 import { parseDaemonArgs, buildReviewChildArgs } from './lib/daemonArgs.js';
 
@@ -240,19 +242,30 @@ export async function runMessagesPass(opts, report, tracker) {
         manual: result.manual,
       });
 
-      // Хартбит завершения шага: index/total = обработано/всего тредов (только счётчики, без PII).
+      // Хартбит завершения шага: исход в lastEvent (chat_not_found/no_new/processed),
+      // чтобы панель показала понятную фразу, а не общее «Готово»/«падение» (M18.5).
+      // index/total = обработано/всего тредов (только счётчики, без PII).
       await writeHeartbeatFile(account, {
         task: 'messages',
-        phase: 'done',
+        phase: RUN_PHASES.DONE,
         index: result.processed,
         total: result.processed,
-        lastEvent: 'finished',
+        lastEvent: classifyMessagesOutcome(result),
         state: 'ok',
         ts: new Date(),
       });
     } catch (err) {
       // Изоляция аккаунта: один не роняет день.
       console.error(`[daemon] [${account}] Ошибка поллинга сообщений: ${err.message}`);
+      // Хартбит ошибки: фаза error + короткая ПРИЧИНА-литерал (classifyErrorReason —
+      // без текста исключения/URL/PII), иначе задача «молча падает» в панели (M18.5).
+      await writeHeartbeatFile(account, {
+        task: 'messages',
+        phase: RUN_PHASES.ERROR,
+        lastEvent: classifyErrorReason(err),
+        state: 'ok',
+        ts: new Date(),
+      }).catch(() => {});
     } finally {
       // Браузер закрываем на всех путях.
       if (browser) {
