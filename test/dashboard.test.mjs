@@ -294,3 +294,85 @@ test('GET /api/tasks: отдаёт снимок runner.list', async () => {
     assert.equal(json.tasks[0].account, 'acc1');
   });
 });
+
+// ============================================================
+// /api/login-done (M19.5): sentinel завершения панельного логина
+// ============================================================
+
+/** Минимальный runner-стаб для тестов login-done (не нужен реальный runner). */
+const minimalRunner = { start: () => ({}), stop: () => ({}), list: () => [] };
+
+/** Поднимает сервер с инъецированным writeLoginDone (без реального IO); вызывает fn(baseUrl). */
+async function withLoginServer(writeLoginDone, fn) {
+  const server = createServer({ runner: minimalRunner, writeLoginDone });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    await fn(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test('POST /api/login-done: с account → 200, вызывает writeLoginDone(account)', async () => {
+  const called = [];
+  const writeLoginDone = async (acc) => { called.push(acc); };
+  await withLoginServer(writeLoginDone, async (base) => {
+    const res = await fetch(`${base}/api/login-done`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'acc1' }),
+    });
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.ok, true);
+    assert.equal(json.account, 'acc1');
+  });
+  assert.deepEqual(called, ['acc1'], 'writeLoginDone должен быть вызван с acc1');
+});
+
+test('POST /api/login-done: пустой account → 400, writeLoginDone не вызывается', async () => {
+  const called = [];
+  const writeLoginDone = async (acc) => { called.push(acc); };
+  await withLoginServer(writeLoginDone, async (base) => {
+    const res = await fetch(`${base}/api/login-done`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: '' }),
+    });
+    assert.equal(res.status, 400);
+    const json = await res.json();
+    assert.equal(json.ok, false);
+  });
+  assert.equal(called.length, 0, 'writeLoginDone не должен вызываться при пустом account');
+});
+
+test('POST /api/login-done: отсутствующий account → 400, writeLoginDone не вызывается', async () => {
+  const called = [];
+  const writeLoginDone = async (acc) => { called.push(acc); };
+  await withLoginServer(writeLoginDone, async (base) => {
+    const res = await fetch(`${base}/api/login-done`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+    const json = await res.json();
+    assert.equal(json.ok, false);
+  });
+  assert.equal(called.length, 0);
+});
+
+test('POST /api/login-done: writeLoginDone бросает → 500', async () => {
+  const writeLoginDone = async () => { throw new Error('диск заполнен'); };
+  await withLoginServer(writeLoginDone, async (base) => {
+    const res = await fetch(`${base}/api/login-done`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'acc1' }),
+    });
+    assert.equal(res.status, 500);
+    const json = await res.json();
+    assert.equal(json.ok, false);
+  });
+});

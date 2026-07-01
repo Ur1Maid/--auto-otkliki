@@ -38,6 +38,7 @@ function makeRunner(overrides = {}) {
     spawn,
     execPath: 'node-stub',
     daemonPath: '/repo/src/daemon.js',
+    loginPath: '/repo/src/login.js',
     now: () => 1000,
     ...overrides.deps,
   });
@@ -340,4 +341,67 @@ test('stop + restart: стale exit дочернего процесса не уб
   assert.equal(runner.list().length, 1, 'child B не должен удаляться от stale exit child A');
   assert.equal(runner.list()[0].task, 'messages');
   assert.equal(runner.list()[0].pid, 5001);
+});
+
+// ============================================================
+// login (M19.5): запуск через login.js, не daemon.js; live никогда
+// ============================================================
+
+test('start: login запускается через login.js, а не daemon.js', () => {
+  const { runner, spawnCalls } = makeRunner();
+  const r = runner.start({ task: 'login', account: 'acc1' });
+  assert.equal(r.ok, true);
+  assert.equal(r.task, 'login');
+  assert.equal(r.account, 'acc1');
+  assert.deepEqual(spawnCalls[0].args, ['/repo/src/login.js', '--panel', '--account', 'acc1']);
+});
+
+test('start: login с live:true — всё равно live=false, args без --live', () => {
+  const { runner, spawnCalls } = makeRunner();
+  const r = runner.start({ task: 'login', account: 'acc1', live: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.live, false, 'login никогда не live');
+  assert.ok(!spawnCalls[0].args.includes('--live'), 'login не должен получать --live');
+  assert.deepEqual(spawnCalls[0].args, ['/repo/src/login.js', '--panel', '--account', 'acc1']);
+});
+
+test('start: login и apply на одном аккаунте — оба запускаются параллельно', () => {
+  const { runner, spawnCalls } = makeRunner();
+  const r1 = runner.start({ task: 'login', account: 'acc1' });
+  const r2 = runner.start({ task: 'apply', account: 'acc1' });
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  assert.equal(spawnCalls.length, 2);
+  assert.equal(runner.list().length, 2);
+});
+
+test('start: дубль login на том же аккаунте → 409, один спавн', () => {
+  const { runner, spawnCalls } = makeRunner();
+  const r1 = runner.start({ task: 'login', account: 'acc1' });
+  assert.equal(r1.ok, true);
+  const r2 = runner.start({ task: 'login', account: 'acc1' });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.status, 409);
+  assert.equal(spawnCalls.length, 1);
+});
+
+test('start: login — аудит-лог содержит «Логин запущен оператором» и «login/acc1», не «LIVE»', () => {
+  const logs = [];
+  const { runner } = makeRunner({ deps: { log: (m) => logs.push(m) } });
+  runner.start({ task: 'login', account: 'acc1' });
+  const audit = logs.find((l) => l.includes('login/acc1'));
+  assert.ok(audit, 'нет аудит-строки для login/acc1');
+  assert.ok(audit.includes('Логин запущен оператором'), 'аудит должен содержать «Логин запущен оператором»');
+  assert.ok(!audit.includes('LIVE запущен оператором'), 'login не должен быть помечен как LIVE');
+});
+
+test('stop: login — killит процесс, возвращает task:login', () => {
+  const { runner, children } = makeRunner();
+  runner.start({ task: 'login', account: 'acc1' });
+  const r = runner.stop({ account: 'acc1', task: 'login' });
+  assert.equal(r.ok, true);
+  assert.equal(r.status, 200);
+  assert.equal(r.task, 'login');
+  assert.equal(children[0].killed, true);
+  assert.equal(runner.list().length, 0);
 });

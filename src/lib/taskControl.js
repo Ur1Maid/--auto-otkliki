@@ -1,14 +1,14 @@
-// Чистый модуль управления задачами демона hh-auto-otkliki (M11.7, обновлён M12.5).
+// Чистый модуль управления задачами демона hh-auto-otkliki (M11.7, обновлён M12.5, M19.5).
 // Без IO, сети, Date.now() — только сборка argv и проверка занятости аккаунта.
 //
 // Безопасные дефолты:
 //   live: false — live-режим требует явного live:true (opt-in).
 //
-// buildTaskCommand(opts) → string[]   — argv для node src/daemon.js
+// buildTaskCommand(opts) → string[]   — argv для node src/daemon.js (или login.js для login)
 // canStart(runningTasks, account, task) → boolean — одна задача данного ТИПА на аккаунт;
 //   разные задачи на одном аккаунте разрешены (M12.5)
 
-const ALLOWED_TASKS = ['apply', 'messages', 'resume'];
+const ALLOWED_TASKS = ['apply', 'messages', 'resume', 'login'];
 
 /**
  * Нормализует значение task: алиасы, trim, lowercase.
@@ -54,7 +54,7 @@ export function buildTaskCommand({ task, account, live = false, limit, text, are
   if (normalizedTask === null) {
     const raw = (task == null ? '' : String(task)).trim().toLowerCase() || '<пусто>';
     throw new Error(
-      `Параметр task должен быть одним из: apply, messages, resume (получено: ${raw})`
+      `Параметр task должен быть одним из: apply, messages, resume, login (получено: ${raw})`
     );
   }
 
@@ -62,6 +62,12 @@ export function buildTaskCommand({ task, account, live = false, limit, text, are
   const trimmedAccount = typeof account === 'string' ? account.trim() : '';
   if (!trimmedAccount) {
     throw new Error('Параметр account обязателен');
+  }
+
+  // login (M19.5): отдельный скрипт src/login.js --panel (headful), НЕ daemon.js.
+  // --live НЕ применяется (сохранение сессии ≠ отправка наружу); limit/text/area не нужны.
+  if (normalizedTask === 'login') {
+    return ['--panel', '--account', trimmedAccount];
   }
 
   const argv = [];

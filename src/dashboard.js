@@ -16,11 +16,11 @@
  */
 
 import http from 'node:http';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { logsDir, statusDir, resourcesLogPath, accountsConfigDir, getAccountLogPath } from './config.js';
+import { logsDir, statusDir, resourcesLogPath, accountsConfigDir, getAccountLogPath, getLoginSentinelPath } from './config.js';
 import {
   parseJsonl,
   aggregateResponses,
@@ -84,6 +84,15 @@ function readJsonBody(req) {
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
+}
+
+/**
+ * Пишет sentinel завершения панельного логина (M19.5): пустой файл logs/login-<account>.done.
+ * login.js --panel проверяет только СУЩЕСТВОВАНИЕ файла (content не читается/не парсится →
+ * нет инъекции). Путь скоуплен по аккаунту через getLoginSentinelPath (traversal-safe).
+ */
+async function defaultWriteLoginDone(account) {
+  await writeFile(getLoginSentinelPath(account), '');
 }
 
 /** Извлекает hostname из заголовка Host (срезает порт, разворачивает IPv6 [::1]). */
@@ -878,8 +887,10 @@ startLiveStream();
 /**
  * Создаёт http-сервер (не слушает — для тестов).
  *
- * @param {{ runner?: object }} [deps] — реестр задач (инъекция для тестов).
- *   По умолчанию каждый сервер получает свой createTaskRunner().
+ * @param {{
+ *   runner?: object,          // реестр задач (инъекция для тестов); по умолчанию createTaskRunner().
+ *   writeLoginDone?: Function, // (account: string) → Promise<void>; пишет sentinel завершения логина (M19.5).
+ * }} [deps]
  * @returns {import('node:http').Server}
  */
 export function createServer(deps = {}) {
@@ -887,6 +898,9 @@ export function createServer(deps = {}) {
   // Аудит-лог запусков/остановок (M11.9): пишем в stdout через console.log
   // (конвенция проекта). Строка содержит только task/account/live/pid — без ключа/PII/писем.
   const runner = deps.runner || createTaskRunner({ log: (msg) => console.log(msg) });
+  const writeLoginDone = typeof deps.writeLoginDone === 'function'
+    ? deps.writeLoginDone
+    : defaultWriteLoginDone;
 
   return http.createServer(async (req, res) => {
     try {
@@ -897,7 +911,8 @@ export function createServer(deps = {}) {
         req.url === '/api/start' ||
         req.url === '/api/stop' ||
         req.url === '/api/tasks' ||
-        req.url === '/api/accounts';
+        req.url === '/api/accounts' ||
+        req.url === '/api/login-done';
       if (isControl && !isLoopbackRequest(req)) {
         sendJson(res, 403, { ok: false, error: 'Запрос отклонён: разрешён только localhost' });
         return;
@@ -940,6 +955,30 @@ export function createServer(deps = {}) {
         const result = runner.stop(stopOpts);
         const { status, ...rest } = result;
         sendJson(res, status || (result.ok ? 200 : 400), rest);
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/api/login-done') {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          sendJson(res, 400, { ok: false, error: err.message });
+          return;
+        }
+        const account = typeof body.account === 'string' ? body.account.trim() : '';
+        if (!account) {
+          sendJson(res, 400, { ok: false, error: 'Параметр account обязателен' });
+          return;
+        }
+        try {
+          await writeLoginDone(account);
+        } catch {
+          sendJson(res, 500, { ok: false, error: 'Не удалось записать сигнал завершения логина' });
+          return;
+        }
+        // В ответ — только имя аккаунта (без cookies/PII/содержимого сессии).
+        sendJson(res, 200, { ok: true, account });
         return;
       }
 

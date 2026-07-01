@@ -472,3 +472,39 @@ test('canStart: алиасное совпадение → false (running message
   const running = [{ account: 'myacc', task: 'messages' }];
   assert.equal(canStart(running, 'myacc', 'poll'), false);
 });
+
+// ============================================================
+// login (M19.5): buildTaskCommand + canStart
+// ============================================================
+
+test('buildTaskCommand: login → argv [--panel, --account, acc]', () => {
+  assert.deepEqual(
+    buildTaskCommand({ task: 'login', account: 'acc' }),
+    ['--panel', '--account', 'acc'],
+  );
+});
+
+test('buildTaskCommand: login с live:true → НЕ содержит --live (login не live)', () => {
+  const argv = buildTaskCommand({ task: 'login', account: 'acc', live: true });
+  assert.ok(!argv.includes('--live'), 'login никогда не добавляет --live');
+  assert.deepEqual(argv, ['--panel', '--account', 'acc']);
+});
+
+test('buildTaskCommand: login игнорирует limit/text/area', () => {
+  assert.deepEqual(
+    buildTaskCommand({ task: 'login', account: 'acc', limit: 50, text: 'DevOps', area: 1 }),
+    ['--panel', '--account', 'acc'],
+  );
+});
+
+test('canStart: login на свободном аккаунте → true', () => {
+  assert.equal(canStart([], 'acc', 'login'), true);
+});
+
+test('canStart: дубль login на том же аккаунте → false (409)', () => {
+  assert.equal(canStart([{ account: 'acc', task: 'login' }], 'acc', 'login'), false);
+});
+
+test('canStart: login независим от apply на том же аккаунте → true', () => {
+  assert.equal(canStart([{ account: 'acc', task: 'apply' }], 'acc', 'login'), true);
+});

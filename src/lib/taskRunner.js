@@ -1,16 +1,17 @@
-// src/lib/taskRunner.js — реестр запущенных задач панели управления (M11.8, обновлён M12.5).
+// src/lib/taskRunner.js — реестр запущенных задач панели управления (M11.8, обновлён M12.5, M19.5).
 //
 // Тонкая управляющая обёртка над чистым taskControl.js (buildTaskCommand/canStart):
-// спавнит `node src/daemon.js --task … --account … [--live]`, трекает дочерний процесс
-// по паре (account, task), останавливает его kill-ом. Spawn/kill инъектируются — тесты не трогают
-// реальный process (см. .claude/rules/testing.md).
+// спавнит `node src/daemon.js --task … --account … [--live]` (или src/login.js для login),
+// трекает дочерний процесс по паре (account, task), останавливает его kill-ом.
+// Spawn/kill инъектируются — тесты не трогают реальный process (см. .claude/rules/testing.md).
 //
-// БЕЗОПАСНОСТЬ (инвариант M12.5):
+// БЕЗОПАСНОСТЬ (инвариант M12.5/M19.5):
 //   - dry-run по умолчанию: '--live' добавляется ТОЛЬКО при live === true (через buildTaskCommand).
+//   - login никогда не live (сохранение сессии ≠ отправка наружу).
 //   - argv передаётся МАССИВОМ в spawn (без shell) — untrusted text/area не становятся
 //     shell-командой.
-//   - одна задача данного ТИПА на аккаунт (account+task); apply+messages+resume могут идти
-//     параллельно (M12.5) — повторная пара отклоняется (409).
+//   - одна задача данного ТИПА на аккаунт (account+task); apply+messages+resume+login могут идти
+//     параллельно по разным типам (M12.5) — повторная пара отклоняется (409).
 //   - в лог/ответ идут только account/task/pid — ни ключа, ни PII, ни текста писем.
 
 import { spawn as nodeSpawn } from 'node:child_process';
@@ -21,6 +22,7 @@ import { buildTaskCommand, canStart, normalizeTask } from './taskControl.js';
 import { nodeSpawnEnv } from './spawnEnv.js';
 
 const DAEMON_JS = path.join(rootDir, 'src', 'daemon.js');
+const LOGIN_JS = path.join(rootDir, 'src', 'login.js');
 
 /**
  * Создаёт реестр задач с инъекцией spawn/kill (для тестов — без реального process).
@@ -29,6 +31,7 @@ const DAEMON_JS = path.join(rootDir, 'src', 'daemon.js');
  *   spawn?: Function,        // (execPath, args, opts) → child-подобный объект {pid, on, kill}
  *   execPath?: string,       // путь к node (по умолчанию process.execPath)
  *   daemonPath?: string,     // путь к daemon.js (по умолчанию src/daemon.js)
+ *   loginPath?: string,      // путь к login.js (по умолчанию src/login.js) — для задачи login (M19.5)
  *   now?: () => number,      // источник времени для startedAt (по умолчанию Date.now)
  *   log?: (msg: string) => void, // best-effort логгер (без секретов/PII)
  * }} [deps]
@@ -38,6 +41,7 @@ export function createTaskRunner(deps = {}) {
   const spawnFn = typeof deps.spawn === 'function' ? deps.spawn : nodeSpawn;
   const execPath = typeof deps.execPath === 'string' && deps.execPath ? deps.execPath : process.execPath;
   const daemonPath = typeof deps.daemonPath === 'string' && deps.daemonPath ? deps.daemonPath : DAEMON_JS;
+  const loginPath = typeof deps.loginPath === 'string' && deps.loginPath ? deps.loginPath : LOGIN_JS;
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
   const log = typeof deps.log === 'function' ? deps.log : () => {};
 
@@ -80,10 +84,12 @@ export function createTaskRunner(deps = {}) {
       return { ok: false, status: 400, reason: err.message };
     }
 
-    // buildTaskCommand гарантирует порядок: ['--task', task, '--account', account, ...].
-    const task = argv[1];
-    const account = argv[3];
-    const live = opts.live === true;
+    // task/account берём из нормализованных opts (buildTaskCommand уже провалидировал их);
+    // из argv позиционно нельзя — login-argv не daemon-argv (['--panel','--account',name]).
+    const task = normalizeTask(opts.task == null ? '' : String(opts.task));
+    const account = typeof opts.account === 'string' ? opts.account.trim() : '';
+    // login никогда не live (сохранение сессии ≠ отправка); прочие — по явному opt-in.
+    const live = task !== 'login' && opts.live === true;
 
     // 2. Инвариант: одна задача данного типа на аккаунт. Та же пара → 409.
     if (!canStart(runningEntries(), account, task)) {
@@ -91,9 +97,11 @@ export function createTaskRunner(deps = {}) {
     }
 
     // 3. Спавн дочернего процесса. argv — массивом, без shell.
+    // Выбираем скрипт: login → login.js (headful), остальные → daemon.js.
+    const scriptPath = task === 'login' ? loginPath : daemonPath;
     let child;
     try {
-      child = spawnFn(execPath, [daemonPath, ...argv], { stdio: 'inherit', env: nodeSpawnEnv() });
+      child = spawnFn(execPath, [scriptPath, ...argv], { stdio: 'inherit', env: nodeSpawnEnv() });
     } catch (err) {
       return { ok: false, status: 500, account, task, reason: err.message };
     }
@@ -112,9 +120,11 @@ export function createTaskRunner(deps = {}) {
       child.on('error', cleanup);
     }
 
-    // Лог без секретов/PII: только task/account/live/pid. Префикс различает live/dry-run,
-    // чтобы аудит логов отделял реальные отправки наружу от прогонов вхолостую.
-    const prefix = live ? 'LIVE запущен оператором' : 'dry-run запущен';
+    // Лог без секретов/PII: только task/account/live/pid. Префикс различает login/live/dry-run,
+    // чтобы аудит логов отделял реальные отправки наружу от прогонов вхолостую и от логинов.
+    const prefix = task === 'login'
+      ? 'Логин запущен оператором'
+      : (live ? 'LIVE запущен оператором' : 'dry-run запущен');
     log(`[control] ${prefix}: ${task}/${account} (live=${live}, pid=${pid})`);
     return { ok: true, status: 200, account, task, pid, live };
   }
