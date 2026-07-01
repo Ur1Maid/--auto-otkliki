@@ -438,6 +438,7 @@ const PAGE = `<!doctype html>
   .lv-stalled { background: #ff6b6b; }
   .lv-captcha { background: #ffb454; }
   .lv-limit { background: #ffb454; }
+  .lv-logged-out { background: #ff6b6b; }
   .lv-idle { background: #8a8f98; }
   .live-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
   .live-row:last-child { border-bottom: none; }
@@ -447,6 +448,8 @@ const PAGE = `<!doctype html>
   .live-bar > i { display: block; height: 100%; background: #4cafef; }
   .live-meta { font-size: 12px; color: #8a8f98; }
   .live-events { font-size: 11px; color: #8a8f98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+  .live-login-call { font-size: 12px; color: #ff8a8a; cursor: pointer; text-decoration: underline; margin-left: 6px; }
+  .ctl-highlight { outline: 2px solid #ffb454; outline-offset: 2px; }
   .live-counts { flex-basis: 100%; font-size: 12px; color: #c8ccd4; }
   .live-chart-wrap { flex-basis: 100%; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
   .live-chart-wrap canvas { flex-shrink: 0; }
@@ -474,7 +477,7 @@ const PAGE = `<!doctype html>
   </div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Сейчас</h2>
-    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-limit"></span> лимит откликов · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Живое обновление (SSE, &lt; 0,5 с).</div>
+    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-limit"></span> лимит откликов · <span class="live-dot lv-logged-out"></span> сессия разлогинена · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Живое обновление (SSE, &lt; 0,5 с).</div>
     <div id="liveRes" class="muted" style="margin-bottom: 10px"></div>
     <div id="liveBody" class="muted">Загрузка…</div>
   </div>
@@ -607,7 +610,7 @@ async function loadControl() {
   }
   // Per-account блок с per-task строками: каждая задача имеет свои Старт/Стоп (M12.7).
   el.innerHTML = controlAccounts.map((acc, i) =>
-    '<div style="margin-bottom: 14px; border: 1px solid #242832; border-radius: 8px; padding: 10px 12px">' +
+    '<div id="' + accCtlId(acc) + '" style="margin-bottom: 14px; border: 1px solid #242832; border-radius: 8px; padding: 10px 12px">' +
     '<div class="ctl-acc" style="margin-bottom: 8px">' + esc(acc) + '</div>' +
     TASKS.map(tk => {
       const key = acc + '\0' + tk;
@@ -684,8 +687,10 @@ async function stopTask(i, task) {
 }
 
 // --- Блок «Сейчас» (M11.11, обновлён M12.8): живое состояние — одна строка на (аккаунт, задачу) ---
-const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', limit: 'лимит откликов', idle: 'простой' };
+const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', limit: 'лимит откликов', logged_out: 'разлогин', idle: 'простой' };
 const LIVE_TASK_LABEL = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
+// Якорь per-account контейнера в блоке «Управление» — цель «→ Войти» из блока «Сейчас» (M19.3).
+function accCtlId(acc) { return 'ctl-acc-' + String(acc).replace(/[^A-Za-z0-9_-]/g, '_'); }
 // Реестр Chart-инстансов мини-графиков текущего прогона (M17.4).
 // Ключ: account + '__' + task. Инстансы уничтожаются перед пересборкой DOM,
 // чтобы не натекать при каждом тике SSE.
@@ -743,6 +748,10 @@ function renderLive(v) {
     const pct = a.progressPct != null ? a.progressPct : 0;
     const events = (a.recentEvents || []).map(e => esc(e.status)).join(', ');
     const livCls = live === 'working' ? 'run' : live === 'idle' ? 'idle' : 'stop';
+    // При разлогине — инлайн-призыв «→ Войти», ведущий к управлению аккаунтом (M19.3).
+    const loginCall = live === 'logged_out'
+      ? '<span class="live-login-call" data-login-acc="' + esc(a.account) + '">→ Войти</span>'
+      : '';
     const c = a.counts;
     const countsTxt = c
       ? 'отпр. ' + esc(c.sent) + ' · пропущ. ' + esc(c.skipped) + ' · уже ' + esc(c.alreadyApplied) +
@@ -766,7 +775,7 @@ function renderLive(v) {
     return '<div class="live-row" data-chart-key="' + chartKey + '" data-canvas-id="' + canvasId + '">' +
       '<div class="live-acc"><span class="live-dot lv-' + esc(live) + '"></span>' + esc(a.account) + '</div>' +
       '<div class="live-task">' + (taskTxt || '<span class="muted">простаивает</span>') +
-        phaseTxt + (taskTxt ? ' <span class="st-' + livCls + '">(' + (LIVENESS_LABEL[live] || live) + ')</span>' : '') + '</div>' +
+        phaseTxt + (taskTxt ? ' <span class="st-' + livCls + '">(' + (LIVENESS_LABEL[live] || live) + ')</span>' : '') + loginCall + '</div>' +
       '<div class="live-bar"><i style="width:' + pct + '%"></i></div>' +
       '<div class="live-meta">' + fmtAge(a.ageMs) + '</div>' +
       '<div class="live-events">' + (events || '—') + '</div>' +
@@ -774,6 +783,10 @@ function renderLive(v) {
       chartHtml +
       '</div>';
   }).join('');
+
+  // «→ Войти» при разлогине ведёт к блоку «Управление» аккаунта (M19.3).
+  el.querySelectorAll('.live-login-call').forEach(s =>
+    s.addEventListener('click', () => scrollToLogin(s.dataset.loginAcc)));
 
   // Создаём мини-графики после вставки DOM (M17.4). Один дограф на активный ряд.
   // destroy() уже вызван выше — здесь всегда создаём новый Chart (нет утечки).
@@ -803,6 +816,19 @@ function renderLive(v) {
         cutout: '60%',
       },
     });
+  }
+}
+
+// Скролл/подсветка блока «Управление» аккаунта из призыва «→ Войти» (M19.3).
+// Кнопка входа появится здесь в M19.6 — пока ведём к управлению аккаунтом.
+function scrollToLogin(account) {
+  const container = document.getElementById(accCtlId(account));
+  const target = container || document.getElementById('controlBody');
+  if (!target) return;
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (container) {
+    container.classList.add('ctl-highlight');
+    setTimeout(() => container.classList.remove('ctl-highlight'), 2000);
   }
 }
 
