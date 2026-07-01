@@ -41,7 +41,12 @@ import { createRunSummary } from './lib/runSummary.js';
 import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
 import { RUN_PHASES, classifyErrorReason } from './lib/runPhase.js';
-import { detectCollectProblem, collectProblemHeartbeat } from './lib/collectState.js';
+import {
+  detectCollectProblem,
+  collectProblemHeartbeat,
+  COLLECT_LOGGED_OUT,
+  COLLECT_EMPTY_SEARCH,
+} from './lib/collectState.js';
 import { withTimeout } from './lib/withTimeout.js';
 import { buildRunCounters } from './lib/runCounters.js';
 
@@ -399,6 +404,31 @@ async function findResponseButton(page) {
 
 async function getVisibleText(page) {
   return page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+}
+
+// Диагностика причины «сбор не дал вакансий» по состоянию страницы (M18.x).
+// «0 вакансий» может значить разлогин / пустой поиск / троттлинг hh.ru — читаем
+// видимый текст + URL (best-effort, под таймаутом getVisibleText) и сводим к литералу
+// detectCollectProblem (logged_out / empty_search / ok). Untrusted-текст только
+// матчится regex'ами внутри детектора — наружу/в лог не эхо-ится (prompt-injection-safe).
+async function readCollectProblem(page) {
+  const pageText = await getVisibleText(page);
+  let pageUrl = '';
+  try { pageUrl = page.url(); } catch { pageUrl = ''; }
+  return detectCollectProblem({ text: pageText, url: pageUrl });
+}
+
+// Короткая русская причина для консоли по литералу detectCollectProblem. Возвращает
+// только наш фиксированный текст (без URL/PII/текста страницы). account — для подсказки
+// команды перелогина.
+function describeCollectProblem(problem, account) {
+  if (problem === COLLECT_LOGGED_OUT) {
+    return `сессия разлогинена (редирект на вход) — переавторизуйтесь: npm.cmd run login -- --account ${account}`;
+  }
+  if (problem === COLLECT_EMPTY_SEARCH) {
+    return 'hh.ru вернул «ничего не найдено» по этому запросу — проверьте --text/--area';
+  }
+  return 'причина не распознана — вероятно троттлинг/антибот hh.ru или медленная сеть (страница выдачи не догрузилась за отведённое время)';
 }
 
 async function getVacancyText(page) {
@@ -1873,15 +1903,12 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       // и пробуем распознать разлогин/пустой поиск — панель покажет понятную причину.
       // Текст страницы — untrusted: только матчится regex'ами внутри detectCollectProblem,
       // наружу/в лог не эхо-ится (prompt-injection-safe).
-      const pageText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
-      let pageUrl = '';
-      try { pageUrl = page.url(); } catch { pageUrl = ''; }
-      const problem = detectCollectProblem({ text: pageText, url: pageUrl });
+      const problem = await readCollectProblem(page);
       // Маппер M19.2: logged_out → state='logged_out' (панель покажет «Сессия
       // разлогинена — нужен вход» + красную точку, приоритет выше stalled), empty →
       // 'empty', иначе общий 'timeout'. Причину-литерал берём из единого ERROR_REASONS.
       const { lastEvent, state } = collectProblemHeartbeat(problem);
-      console.log(`[${account}] Сбор вакансий превысил таймаут — шаг остановлен.`);
+      console.log(`[${account}] Сбор вакансий превысил таймаут: ${describeCollectProblem(problem, account)}.`);
       await writeHeartbeatFile(account, {
         task: 'apply',
         phase: RUN_PHASES.ERROR,
@@ -1897,7 +1924,29 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     const { urls: vacancies, remoteSet, matchByUrl } = collected;
 
     if (vacancies.length === 0) {
-      console.log(`[${account}] Не нашел вакансии. Добавьте ссылки в input/vacancies.txt или передайте --search/--text.`);
+      // Пул пуст. Раньше здесь был только текст без причины и БЕЗ error-хартбита — оператор
+      // (и панель) не понимали, почему нет откликов. Внутренний per-page таймаут сбора
+      // (collectFromSearch исчерпал ретраи → вернул 0) не проходит через таймаут-ветку выше,
+      // поэтому диагностируем состояние страницы здесь: разлогин / пустой поиск / троттлинг.
+      const problem = await readCollectProblem(page);
+      const { lastEvent, state } = collectProblemHeartbeat(problem);
+      console.log(
+        `[${account}] Не нашёл вакансии: ${describeCollectProblem(problem, account)}. ` +
+        'Можно также добавить ссылки в input/vacancies.txt или уточнить --search/--text.',
+      );
+      // Хартбит: панель покажет понятную причину (formatPhase: logged_out→«Сессия
+      // разлогинена — нужен вход», empty→«Поиск пуст», иначе «Ошибка: таймаут») вместо
+      // тишины/устаревшего «собирает».
+      await writeHeartbeatFile(account, {
+        task: 'apply',
+        phase: RUN_PHASES.ERROR,
+        index: 0,
+        total: 0,
+        lastEvent,
+        state,
+        ts: new Date(),
+        counts: runCounts(),
+      });
       return;
     }
 
