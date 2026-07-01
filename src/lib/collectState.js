@@ -16,10 +16,20 @@
 //
 // Кириллица-safe: НЕ используем `\b`/`\w`-границы (на кириллице ломаются — урок M11.6 runState.js).
 
+import { ERROR_REASONS } from './runPhase.js';
+
 /** Литералы состояния сбора (используются в heartbeat lastEvent/state вызывающим кодом). */
 export const COLLECT_OK = 'ok';
 export const COLLECT_LOGGED_OUT = 'logged_out';
 export const COLLECT_EMPTY_SEARCH = 'empty_search';
+
+/**
+ * Литерал heartbeat.state при разлогине. Совпадает с liveStatus.LIVENESS_LOGGED_OUT и
+ * веткой formatPhase `state==='logged_out'` (M19.1) — держим локальной строкой, чтобы не
+ * тянуть UI-модули в чистый детектор. Значение = COLLECT_LOGGED_OUT (без дрейфа литерала).
+ */
+export const HEARTBEAT_STATE_LOGGED_OUT = COLLECT_LOGGED_OUT;
+export const HEARTBEAT_STATE_OK = COLLECT_OK;
 
 /**
  * Текстовые признаки разлогина / редиректа на страницу входа hh.ru (русский UI, case-insensitive).
@@ -90,4 +100,30 @@ export function detectCollectProblem(pageTextOrSignals) {
   if (text && LOGGED_OUT_PATTERNS.some((re) => re.test(text))) return COLLECT_LOGGED_OUT;
   if (text && EMPTY_SEARCH_PATTERNS.some((re) => re.test(text))) return COLLECT_EMPTY_SEARCH;
   return COLLECT_OK;
+}
+
+/**
+ * Маппит результат detectCollectProblem в поля heartbeat, которые пишет живой флоу
+ * (review.js в таймаут-ветке сбора; messages-путь daemon.js): `{ lastEvent, state }`.
+ *
+ *   logged_out   → lastEvent='auth',    state='logged_out'
+ *                  (M19.1: панель покажет «Сессия разлогинена — нужен вход» + красную точку;
+ *                   приоритет выше stalled — без входа задача не сдвинется);
+ *   empty_search → lastEvent='empty',   state='ok' (пустой поиск — не разлогин, не «зависание»);
+ *   ok/прочее    → lastEvent='timeout', state='ok' (настоящий таймаут: причину не вскрыли).
+ *
+ * Причина-литерал берётся из ERROR_REASONS (единый источник, без дубля строк). Чистая,
+ * никогда не бросает: неизвестный вход → timeout/ok.
+ *
+ * @param {'logged_out'|'empty_search'|'ok'|*} problem — результат detectCollectProblem
+ * @returns {{ lastEvent: string, state: string }}
+ */
+export function collectProblemHeartbeat(problem) {
+  if (problem === COLLECT_LOGGED_OUT) {
+    return { lastEvent: ERROR_REASONS.AUTH, state: HEARTBEAT_STATE_LOGGED_OUT };
+  }
+  if (problem === COLLECT_EMPTY_SEARCH) {
+    return { lastEvent: ERROR_REASONS.EMPTY, state: HEARTBEAT_STATE_OK };
+  }
+  return { lastEvent: ERROR_REASONS.TIMEOUT, state: HEARTBEAT_STATE_OK };
 }

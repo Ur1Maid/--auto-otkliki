@@ -40,8 +40,8 @@ import { REQUIRED_MANUAL_PATTERNS, RESPONSE_BUTTON_TEXTS, APPLICATION_FLOW_BUTTO
 import { createRunSummary } from './lib/runSummary.js';
 import { buildResumeSuggestions, summarizeSuggestions } from './lib/resumeSuggestions.js';
 import { writeHeartbeatFile } from './lib/statusWriter.js';
-import { RUN_PHASES, ERROR_REASONS, classifyErrorReason } from './lib/runPhase.js';
-import { detectCollectProblem, COLLECT_LOGGED_OUT, COLLECT_EMPTY_SEARCH } from './lib/collectState.js';
+import { RUN_PHASES, classifyErrorReason } from './lib/runPhase.js';
+import { detectCollectProblem, collectProblemHeartbeat } from './lib/collectState.js';
 import { withTimeout } from './lib/withTimeout.js';
 import { buildRunCounters } from './lib/runCounters.js';
 
@@ -1830,19 +1830,18 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       let pageUrl = '';
       try { pageUrl = page.url(); } catch { pageUrl = ''; }
       const problem = detectCollectProblem({ text: pageText, url: pageUrl });
-      const reason = problem === COLLECT_LOGGED_OUT
-        ? ERROR_REASONS.AUTH
-        : problem === COLLECT_EMPTY_SEARCH
-          ? ERROR_REASONS.EMPTY
-          : ERROR_REASONS.TIMEOUT;
+      // Маппер M19.2: logged_out → state='logged_out' (панель покажет «Сессия
+      // разлогинена — нужен вход» + красную точку, приоритет выше stalled), empty →
+      // 'empty', иначе общий 'timeout'. Причину-литерал берём из единого ERROR_REASONS.
+      const { lastEvent, state } = collectProblemHeartbeat(problem);
       console.log(`[${account}] Сбор вакансий превысил таймаут — шаг остановлен.`);
       await writeHeartbeatFile(account, {
         task: 'apply',
         phase: RUN_PHASES.ERROR,
         index: 0,
         total: null,
-        lastEvent: reason,
-        state: 'ok',
+        lastEvent,
+        state,
         ts: new Date(),
         counts: runCounts(),
       });

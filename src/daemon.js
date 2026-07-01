@@ -48,6 +48,7 @@ import { writeHeartbeatFile } from './lib/statusWriter.js';
 import { createResourceLogger } from './lib/resourceLog.js';
 import { classifyMessagesOutcome } from './lib/messagesOutcome.js';
 import { RUN_PHASES, classifyErrorReason } from './lib/runPhase.js';
+import { collectProblemHeartbeat, COLLECT_LOGGED_OUT } from './lib/collectState.js';
 import { confirm } from './prompts.js';
 import { parseDaemonArgs, buildReviewChildArgs } from './lib/daemonArgs.js';
 
@@ -242,18 +243,33 @@ export async function runMessagesPass(opts, report, tracker) {
         manual: result.manual,
       });
 
-      // Хартбит завершения шага: исход в lastEvent (chat_not_found/no_new/processed),
-      // чтобы панель показала понятную фразу, а не общее «Готово»/«падение» (M18.5).
-      // index/total = обработано/всего тредов (только счётчики, без PII).
-      await writeHeartbeatFile(account, {
-        task: 'messages',
-        phase: RUN_PHASES.DONE,
-        index: result.processed,
-        total: result.processed,
-        lastEvent: classifyMessagesOutcome(result),
-        state: 'ok',
-        ts: new Date(),
-      });
+      if (result.loggedOut) {
+        // Сессия разлогинена (M19.2): панель показывает «Сессия разлогинена — нужен вход»
+        // + красную точку, а не безобидное «Чат не найден». Причина/state — из единого маппера.
+        const { lastEvent, state } = collectProblemHeartbeat(COLLECT_LOGGED_OUT);
+        await writeHeartbeatFile(account, {
+          task: 'messages',
+          phase: RUN_PHASES.ERROR,
+          index: 0,
+          total: null,
+          lastEvent,
+          state,
+          ts: new Date(),
+        });
+      } else {
+        // Хартбит завершения шага: исход в lastEvent (chat_not_found/no_new/processed),
+        // чтобы панель показала понятную фразу, а не общее «Готово»/«падение» (M18.5).
+        // index/total = обработано/всего тредов (только счётчики, без PII).
+        await writeHeartbeatFile(account, {
+          task: 'messages',
+          phase: RUN_PHASES.DONE,
+          index: result.processed,
+          total: result.processed,
+          lastEvent: classifyMessagesOutcome(result),
+          state: 'ok',
+          ts: new Date(),
+        });
+      }
     } catch (err) {
       // Изоляция аккаунта: один не роняет день.
       console.error(`[daemon] [${account}] Ошибка поллинга сообщений: ${err.message}`);

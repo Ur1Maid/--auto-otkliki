@@ -2,13 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   detectCollectProblem,
+  collectProblemHeartbeat,
   LOGGED_OUT_PATTERNS,
   LOGIN_URL_PATTERNS,
   EMPTY_SEARCH_PATTERNS,
   COLLECT_OK,
   COLLECT_LOGGED_OUT,
   COLLECT_EMPTY_SEARCH,
+  HEARTBEAT_STATE_LOGGED_OUT,
+  HEARTBEAT_STATE_OK,
 } from '../src/lib/collectState.js';
+import { ERROR_REASONS } from '../src/lib/runPhase.js';
 
 // --- паттерны экспортируются непустыми массивами ---
 
@@ -136,4 +140,50 @@ test('detectCollectProblem: объект без text/url → ok', () => {
 
 test('detectCollectProblem: объект с нестроковыми text/url → ok', () => {
   assert.equal(detectCollectProblem({ text: 123, url: {} }), 'ok');
+});
+
+// --- collectProblemHeartbeat: маппер причины сбора в поля heartbeat (M19.2) ---
+
+test('литералы state heartbeat совпадают с литералами сбора (без дрейфа)', () => {
+  assert.equal(HEARTBEAT_STATE_LOGGED_OUT, COLLECT_LOGGED_OUT);
+  assert.equal(HEARTBEAT_STATE_OK, COLLECT_OK);
+  assert.equal(HEARTBEAT_STATE_LOGGED_OUT, 'logged_out');
+});
+
+test('collectProblemHeartbeat: logged_out → auth + state logged_out', () => {
+  assert.deepEqual(collectProblemHeartbeat(COLLECT_LOGGED_OUT), {
+    lastEvent: ERROR_REASONS.AUTH,
+    state: 'logged_out',
+  });
+});
+
+test('collectProblemHeartbeat: empty_search → empty + state ok', () => {
+  assert.deepEqual(collectProblemHeartbeat(COLLECT_EMPTY_SEARCH), {
+    lastEvent: ERROR_REASONS.EMPTY,
+    state: 'ok',
+  });
+});
+
+test('collectProblemHeartbeat: ok → timeout + state ok (причину не вскрыли)', () => {
+  assert.deepEqual(collectProblemHeartbeat(COLLECT_OK), {
+    lastEvent: ERROR_REASONS.TIMEOUT,
+    state: 'ok',
+  });
+});
+
+test('collectProblemHeartbeat: неизвестный/мусорный вход → timeout + state ok', () => {
+  for (const junk of ['whatever', '', null, undefined, 42, {}]) {
+    assert.deepEqual(collectProblemHeartbeat(junk), {
+      lastEvent: ERROR_REASONS.TIMEOUT,
+      state: 'ok',
+    });
+  }
+});
+
+test('collectProblemHeartbeat: только logged_out несёт нейтральный «зависший» state', () => {
+  // Инвариант M19.1: разлогин важнее stalled (state='logged_out'); пустой поиск и таймаут
+  // — обычные исходы (state='ok'), не должны маскироваться под разлогин.
+  assert.equal(collectProblemHeartbeat(COLLECT_LOGGED_OUT).state, 'logged_out');
+  assert.equal(collectProblemHeartbeat(COLLECT_EMPTY_SEARCH).state, 'ok');
+  assert.equal(collectProblemHeartbeat(COLLECT_OK).state, 'ok');
 });

@@ -26,6 +26,7 @@ import { sendReply, createProcessedTracker } from './lib/replySend.js';
 import { runIsolated } from './lib/isolate.js';
 import { randomDelayMs } from './lib/pacing.js';
 import { withTimeout } from './lib/withTimeout.js';
+import { detectCollectProblem, COLLECT_LOGGED_OUT } from './lib/collectState.js';
 
 /** Страница чата кандидата. Современный hh.ru рендерит chatik ИНЛАЙН здесь (не в iframe). */
 export const CHAT_URL = 'https://hh.ru/chat';
@@ -166,9 +167,22 @@ export async function processUnread(page, opts = {}) {
   // 1. Получаем frame чата (под таймаут-гардом — фрейм не должен висеть вечно, M16.4).
   const frame = await withTimeout(getChatFrame(page), GET_CHAT_FRAME_TIMEOUT_MS, null);
   if (!frame) {
-    console.log('[messages] Чат не найден, пропускаем обработку сообщений');
-    // chatFound=false → панель покажет понятное «Чат не найден» (M18.5), не «падение».
-    return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0, chatFound: false };
+    // Чат не найден = либо штатно пусто, либо сессия разлогинена (goto /chat редиректит на
+    // вход). Best-effort проверяем текст+URL (M19.2): при разлогине панель должна показать
+    // «Сессия разлогинена», а не безобидное «Чат не найден». Текст страницы — untrusted:
+    // только .test()-матчится внутри detectCollectProblem, наружу/в лог не эхо-ится.
+    const pageText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+    let pageUrl = '';
+    try { pageUrl = page.url(); } catch { pageUrl = ''; }
+    const loggedOut = detectCollectProblem({ text: pageText, url: pageUrl }) === COLLECT_LOGGED_OUT;
+    console.log(
+      loggedOut
+        ? '[messages] Сессия разлогинена — нужен вход, обработка сообщений пропущена'
+        : '[messages] Чат не найден, пропускаем обработку сообщений',
+    );
+    // chatFound=false → «Чат не найден» (M18.5); loggedOut=true → вызывающий (daemon)
+    // поднимет heartbeat state='logged_out' вместо безобидного «Готово».
+    return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0, chatFound: false, loggedOut };
   }
 
   // 2. Список тредов. По умолчанию — только непрочитанные (дёшево). С includeRead —
