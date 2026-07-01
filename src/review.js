@@ -24,7 +24,7 @@ import { detectFieldKind, getMainQuestion, isSalaryContext } from './lib/fields.
 import { extractResumeKeywords, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { prioritizeRemoteFirst, looksRemoteInText } from './lib/vacancyPriority.js';
-import { parseMatchPercent } from './lib/matchBadge.js';
+import { parseMatchPercent, isConfidentMatchReject } from './lib/matchBadge.js';
 import { dedupeReposts } from './lib/vacancyDedup.js';
 import { randomDelayMs } from './lib/pacing.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
@@ -351,7 +351,15 @@ async function collectFromSearch(page, searchUrl, limit) {
     `Приоритизация: всего ${ordered.length}, из них удалёнка ${remoteSet.size} ` +
     `(отклик в первую очередь${removedReposts > 0 ? `; репостов схлопнуто ${removedReposts}` : ''}).`,
   );
-  return { urls: ordered, remoteSet };
+  const matchByUrl = new Map();
+  for (const item of deduped) {
+    const canonical = normalizeVacancyUrl(item.url || '');
+    if (!canonical) continue;
+    if (typeof item.matchPercent === 'number' && Number.isFinite(item.matchPercent)) {
+      matchByUrl.set(canonical, item.matchPercent);
+    }
+  }
+  return { urls: ordered, remoteSet, matchByUrl };
 }
 
 async function findResponseButton(page) {
@@ -1580,7 +1588,7 @@ async function appendLog(entry, account = 'default') {
   await appendFile(getAccountLogPath(account), `${JSON.stringify({ ...entry, account, at: new Date().toISOString() })}\n`);
 }
 
-async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '', remoteFromCard = false, onPhase = () => {} } = {}) {
+async function reviewVacancy(page, url, index, total, { account = 'default', autoApply = false, dryRun = false, deepSeekContext, resumeUpgradeCollector, scoreCache = null, resumeHash = '', remoteFromCard = false, matchPercentFromCard = null, onPhase = () => {} } = {}) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(700);
@@ -1599,11 +1607,25 @@ async function reviewVacancy(page, url, index, total, { account = 'default', aut
     return { status: 'already_applied', title };
   }
 
+  // M3.3: уверенный локальный reject по плашке hh.ru «Подходит по навыкам на N%».
+  // Только ОТКЛОНЯЕТ (score из плашки ниже порога) — НИКОГДА не пропускает к отклику,
+  // отдельный return гарантирует reject независимо от minScore (honesty/safety M3.2).
+  if (isConfidentMatchReject(matchPercentFromCard)) {
+    console.log(`Пропускаю: плашка совпадения ${matchPercentFromCard}% ниже порога уверенного reject — DeepSeek пропускаю (0 токенов).`);
+    return {
+      status: 'skipped',
+      title,
+      relevance: { score: matchPercentFromCard, reason: `плашка hh.ru: подходит по навыкам на ${matchPercentFromCard}%` },
+      scoredBy: 'match-badge',
+    };
+  }
+
   const key = scoreCache ? cacheKey(url, resumeHash) : '';
   const cachedRelevance = key ? getCached(scoreCache, key) : null;
 
   let relevance;
   // scoredBy отражает, какой метод использовался: 'cache' | 'local' | 'model'
+  // ('match-badge' — на раннем reject по плашке совпадения выше, до этого блока).
   let scoredBy;
   if (cachedRelevance) {
     relevance = cachedRelevance;
@@ -1774,6 +1796,7 @@ async function buildDeepSeekContextForAccount(account, sharedContext) {
 async function collectVacanciesForAccount(page, args, account) {
   let fromSearch = [];
   let remoteSet = new Set();
+  let matchByUrl = new Map();
 
   if (args.search) {
     console.log(`[${account}] Собираю вакансии из поиска.`);
@@ -1783,13 +1806,14 @@ async function collectVacanciesForAccount(page, args, account) {
     const collected = await collectFromSearch(page, args.search, collectCap);
     fromSearch = collected.urls;
     remoteSet = collected.remoteSet;
+    matchByUrl = collected.matchByUrl;
   }
 
   const fromFile = await readVacancyFile(args.file);
   // Дедуп с сохранением порядка (удалёнка из поиска впереди). НЕ режем по limit —
   // лимит ограничивает число откликов в цикле обработки, а не размер пула.
   const urls = [...new Set([...fromSearch, ...fromFile])];
-  return { urls, remoteSet };
+  return { urls, remoteSet, matchByUrl };
 }
 
 async function processAccount(account, args, sharedDeepSeekContext) {
@@ -1847,7 +1871,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
       });
       return;
     }
-    const { urls: vacancies, remoteSet } = collected;
+    const { urls: vacancies, remoteSet, matchByUrl } = collected;
 
     if (vacancies.length === 0) {
       console.log(`[${account}] Не нашел вакансии. Добавьте ссылки в input/vacancies.txt или передайте --search/--text.`);
@@ -1903,6 +1927,7 @@ async function processAccount(account, args, sharedDeepSeekContext) {
           // Канонизируем url: пул из поиска уже канонический, но файловые URL
           // нормализуются иначе (normalizeHhUrl, с query) — приводим к канону.
           remoteFromCard: remoteSet.has(normalizeVacancyUrl(url) || url),
+          matchPercentFromCard: matchByUrl.get(normalizeVacancyUrl(url) || url) ?? null,
           onPhase
         });
         summary.record(result);
