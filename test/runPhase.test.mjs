@@ -196,6 +196,19 @@ test('formatPhase: limit (state) важнее любой фазы → «Лими
   assert.equal(formatPhase({ phase: 'scoring', state: 'limit' }), 'Лимит откликов');
 });
 
+test('formatPhase: logged_out (state) важнее любой фазы → «Сессия разлогинена — нужен вход» (M19.1)', () => {
+  assert.equal(
+    formatPhase({ phase: 'collecting', index: 0, total: 0, state: 'logged_out' }),
+    'Сессия разлогинена — нужен вход',
+  );
+  assert.equal(formatPhase({ phase: 'scoring', state: 'logged_out' }), 'Сессия разлогинена — нужен вход');
+});
+
+test('formatPhase: captcha/limit важнее logged_out (M19.1)', () => {
+  assert.equal(formatPhase({ state: 'captcha' }), 'Капча');
+  assert.equal(formatPhase({ state: 'limit' }), 'Лимит откликов');
+});
+
 test('formatPhase: неизвестная/пустая фаза → Простаивает', () => {
   assert.equal(formatPhase({ phase: '' }), 'Простаивает');
   assert.equal(formatPhase({ phase: 'review' }), 'Простаивает');

@@ -7,6 +7,7 @@ import {
   LIVENESS_STALLED,
   LIVENESS_CAPTCHA,
   LIVENESS_LIMIT,
+  LIVENESS_LOGGED_OUT,
   LIVENESS_IDLE,
 } from '../src/lib/liveStatus.js';
 
@@ -51,6 +52,33 @@ test('accountLiveness: captcha приоритетнее limit', () => {
   const hb = { account: 'a', ts: iso(NOW - 1000), state: 'captcha' };
   // оба «липких» — captcha проверяется первой
   assert.equal(accountLiveness(hb, { now: NOW, withinWorkingHours: true }), LIVENESS_CAPTCHA);
+});
+
+test('accountLiveness: state=logged_out → logged_out (даже если свежий) (M19.1)', () => {
+  const hb = { account: 'a', ts: iso(NOW - 1000), state: 'logged_out' };
+  assert.equal(accountLiveness(hb, { now: NOW, withinWorkingHours: true }), LIVENESS_LOGGED_OUT);
+});
+
+test('accountLiveness: logged_out приоритетнее stalled (устаревший в окне) (M19.1)', () => {
+  // разлогин — корневая причина; даже устаревший хартбит в рабочем окне → logged_out, не stalled
+  const hb = { account: 'a', ts: iso(NOW - 5 * 60 * 1000), state: 'logged_out' };
+  assert.equal(
+    accountLiveness(hb, { now: NOW, withinWorkingHours: true, thresholdMs: 120000 }),
+    LIVENESS_LOGGED_OUT,
+  );
+});
+
+test('accountLiveness: logged_out приоритетнее done→idle (M19.1)', () => {
+  // разлогин проверяется до phase==='done' короткого замыкания → logged_out, не idle
+  const hb = { account: 'a', ts: iso(NOW - 1000), phase: 'done', state: 'logged_out' };
+  assert.equal(accountLiveness(hb, { now: NOW, withinWorkingHours: true }), LIVENESS_LOGGED_OUT);
+});
+
+test('accountLiveness: captcha/limit приоритетнее logged_out (M19.1)', () => {
+  const captcha = { account: 'a', ts: iso(NOW - 1000), state: 'captcha' };
+  assert.equal(accountLiveness(captcha, { now: NOW, withinWorkingHours: true }), LIVENESS_CAPTCHA);
+  const limit = { account: 'a', ts: iso(NOW - 1000), state: 'limit' };
+  assert.equal(accountLiveness(limit, { now: NOW, withinWorkingHours: true }), LIVENESS_LIMIT);
 });
 
 test('accountLiveness: phase=done → idle (завершён, не «работает»)', () => {
