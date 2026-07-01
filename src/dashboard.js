@@ -452,7 +452,7 @@ const PAGE = `<!doctype html>
   .ctl-highlight { outline: 2px solid #ffb454; outline-offset: 2px; }
   .live-counts { flex-basis: 100%; font-size: 12px; color: #c8ccd4; }
   .live-chart-wrap { flex-basis: 100%; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
-  .live-chart-wrap canvas { flex-shrink: 0; }
+  .live-chart-wrap canvas { flex-shrink: 0; width: 64px !important; height: 64px !important; }
   details.history { margin-top: 8px; border: 1px solid #242832; border-radius: 10px; background: #14161c; }
   details.history > summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 600; color: #c8ccd4; user-select: none; list-style: none; }
   details.history > summary::-webkit-details-marker { display: none; }
@@ -766,7 +766,7 @@ function renderLive(v) {
     const canvasId = 'lc-' + chartKey.replace(/[^A-Za-z0-9_-]/g, '_');
     const showChart = !!(c && (c.sent || c.skipped || c.alreadyApplied || c.errors));
     const chartHtml = showChart
-      ? '<div class="live-chart-wrap"><canvas id="' + canvasId + '" width="80" height="80"></canvas>' +
+      ? '<div class="live-chart-wrap"><canvas id="' + canvasId + '" width="64" height="64"></canvas>' +
         '<span class="muted" style="font-size:11px">отпр.&nbsp;<b style="color:#7bd88f">' + esc(c.sent) + '</b>' +
         '&nbsp;· пропущ.&nbsp;<b style="color:#8a8f98">' + esc(c.skipped) + '</b>' +
         '&nbsp;· уже&nbsp;<b style="color:#4cafef">' + esc(c.alreadyApplied) + '</b>' +
@@ -809,6 +809,10 @@ function renderLive(v) {
       },
       options: {
         animation: false,
+        // Фикс размера доната (M17.4): без этого Chart.js (responsive:true по умолчанию)
+        // игнорирует width/height канваса и растягивает донат на всю ширину строки.
+        responsive: false,
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { label: ctx => ctx.label + ': ' + ctx.parsed } },
