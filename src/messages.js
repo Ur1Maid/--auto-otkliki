@@ -300,6 +300,13 @@ export async function processUnread(page, opts = {}) {
       : `Найдено непрочитанных тредов: ${targets.length}`)
   );
 
+  // Прогресс-логирование обхода: total/logPrefix для строк вида «Тред i/total».
+  // Без них при большом списке (100+) шаг после «Найдено N тредов» выглядит как
+  // зависание — прогресса не видно. Логируем только служебные поля (index, chatId,
+  // reason-категорию, счётчики); текст письма работодателя в лог по-прежнему не идёт.
+  const total = targets.length;
+  const logPrefix = account ? `[${account}] ` : '';
+
   let processed = 0;
   let replied = 0;
   let skipped = 0;
@@ -307,7 +314,7 @@ export async function processUnread(page, opts = {}) {
   let errors = 0;
 
   // 3. Обходим выбранные треды через runIsolated — один сбой не роняет остальные.
-  const threadResults = await runIsolated(targets, async (thread) => {
+  const threadResults = await runIsolated(targets, async (thread, index) => {
     const { chatId } = thread;
 
     // a. Идемпотентность: уже обработан в этой сессии.
@@ -315,6 +322,10 @@ export async function processUnread(page, opts = {}) {
       skipped++;
       return;
     }
+
+    // Прогресс: печатаем ДО клика, чтобы при зависании было видно, на каком именно
+    // треде застряли (index 1-based). chatId — внутренний id чата hh.ru, не PII.
+    console.log(`[messages] ${logPrefix}Тред ${index + 1}/${total} (${chatId}): открываю…`);
 
     // b. Открываем тред кликом по ячейке (resilient: игнорируем ошибку клика).
     await frame
@@ -336,6 +347,7 @@ export async function processUnread(page, opts = {}) {
     if (decision.action === 'skip') {
       skipped++;
       tracker.add(chatId); // Помечаем чтобы не пере-сканировать в этой сессии.
+      console.log(`[messages] ${logPrefix}Тред ${chatId}: пропуск (${decision.reason})`);
       return;
     }
 
@@ -397,6 +409,7 @@ export async function processUnread(page, opts = {}) {
 
       if (sendResult.sent) {
         replied++;
+        console.log(`[messages] ${logPrefix}Тред ${chatId}: ответ отправлен`);
         // HANDSHAKE: tracker.add ТОЛЬКО после успешной отправки (dry-run/not-confirmed
         // НЕ трекаются — поздний реальный прогон сможет отправить).
         tracker.add(chatId);
