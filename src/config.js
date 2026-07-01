@@ -66,6 +66,15 @@ export function getAccountStatusPath(account = 'default') {
   return path.join(statusDir, `${normalizeAccountName(account)}.json`);
 }
 
+/**
+ * Путь sentinel-файла завершения панельного логина (M19.4/M19.5).
+ * Панель пишет этот файл (эндпоинт /api/login-done), login.js --panel опрашивает его,
+ * чтобы сохранить сессию без stdin. Файл транзиентный и git-ignored (logs/login-*.done).
+ */
+export function getLoginSentinelPath(account = 'default') {
+  return path.join(logsDir, `login-${normalizeAccountName(account)}.done`);
+}
+
 function normalizeStatusTask(task) {
   return String(task || '')
     .trim()
