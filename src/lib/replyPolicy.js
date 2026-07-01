@@ -10,8 +10,8 @@
 //   3. нет входящих (employer) вообще         → skip
 //   4. последнее входящее — системное/авто    → skip
 //   5. последнее входящее содержит вопрос     → needs_model  (выше приглашения!)
-//   6. последнее входящее — приглашение       → manual
-//   7. иначе                                  → manual (консервативный дефолт)
+//   6. последнее входящее — приглашение       → needs_model  (черновик ответа)
+//   7. иначе                                  → needs_model  (черновик ответа)
 
 import { matchesAnyPattern } from './answers.js';
 import { normalizeText } from './knowledge.js';
@@ -127,9 +127,9 @@ export function decideReply(messages) {
 
   // 6. Приглашение без вопроса
   if (matchesAnyPattern(text, INVITATION_PATTERNS)) {
-    return { action: 'manual', reason: 'приглашение — требует решения человека' };
+    return { action: 'needs_model', reason: 'приглашение — черновик ответа' };
   }
 
-  // 7. Неоднозначно — консервативный дефолт: не авто-отвечаем
-  return { action: 'manual', reason: 'неоднозначно — на ручную проверку' };
+  // 7. Неоднозначно — черновик ответа моделью
+  return { action: 'needs_model', reason: 'неоднозначно — черновик ответа' };
 }
