@@ -32,7 +32,8 @@ async function readOptional(filePath) {
 
 /**
  * Список аккаунтов из config/accounts/ (имена директорий) для блока «Управление».
- * Best-effort — никогда не бросает. Исключает шаблон 'example' и скрытые папки.
+ * Best-effort — никогда не бросает. Исключает шаблон 'example', служебный 'default'
+ * (не настоящий аккаунт — без резюме/сессии, задачи по нему падают) и скрытые папки.
  * Имена аккаунтов — операторские метки (не ключ/PII; те же имена уже видны в
  * /api/metrics byAccount), отдавать их в локальную панель безопасно.
  *
@@ -52,7 +53,7 @@ export async function listAccounts(deps = {}) {
   return entries
     .filter((e) => e && typeof e.isDirectory === 'function' && e.isDirectory())
     .map((e) => e.name)
-    .filter((name) => typeof name === 'string' && name && name !== 'example' && !name.startsWith('.'))
+    .filter((name) => typeof name === 'string' && name && name !== 'example' && name !== 'default' && !name.startsWith('.'))
     .sort();
 }
 
