@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hh-auto-otkliki — панель</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; background: #0f1115; color: #e6e6e6; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #8a8f98; font-size: 13px; margin-bottom: 20px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: #171a21; border: 1px solid #242832; border-radius: 10px; padding: 14px 16px; }
+  .card .v { font-size: 26px; font-weight: 600; }
+  .card .l { color: #8a8f98; font-size: 12px; margin-top: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .panel { background: #171a21; border: 1px solid #242832; border-radius: 10px; padding: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; color: #c8ccd4; font-weight: 600; }
+  .err { color: #ff6b6b; }
+  .muted { color: #8a8f98; font-size: 13px; }
+  .alert { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid #242832; font-size: 13px; }
+  .alert .lvl { font-weight: 700; font-size: 11px; padding: 2px 6px; border-radius: 5px; }
+  .alert.crit .lvl { background: #5a1f1f; color: #ff9b9b; }
+  .alert.warn .lvl { background: #5a4a1f; color: #ffd47a; }
+  .alert .msg { flex: 1; color: #c8ccd4; }
+  .alert .when { color: #8a8f98; white-space: nowrap; }
+  button { background: #242832; color: #e6e6e6; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .ctl-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
+  .ctl-row:last-child { border-bottom: none; }
+  .ctl-acc { font-weight: 600; min-width: 120px; }
+  .ctl-btns { display: flex; gap: 6px; }
+  .ctl-stop { border-color: #5a1f1f; }
+  .ctl-login-need { border-color: #ff6b6b; box-shadow: 0 0 0 1px #ff6b6b; }
+  .ctl-status { margin-left: auto; font-size: 12px; }
+  .st-run { color: #7bd88f; }
+  .st-stop { color: #ffb454; }
+  .st-idle { color: #8a8f98; }
+  .live-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; }
+  .lv-working { background: #7bd88f; }
+  .lv-stalled { background: #ff6b6b; }
+  .lv-captcha { background: #ffb454; }
+  .lv-limit { background: #ffb454; }
+  .lv-logged-out { background: #ff6b6b; }
+  .lv-idle { background: #8a8f98; }
+  .live-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid #242832; flex-wrap: wrap; }
+  .live-row:last-child { border-bottom: none; }
+  .live-acc { font-weight: 600; min-width: 120px; display: flex; align-items: center; gap: 8px; }
+  .live-task { font-size: 13px; color: #c8ccd4; min-width: 150px; }
+  .live-bar { flex: 1; min-width: 120px; height: 8px; background: #242832; border-radius: 5px; overflow: hidden; }
+  .live-bar > i { display: block; height: 100%; background: #4cafef; }
+  .live-meta { font-size: 12px; color: #8a8f98; }
+  .live-events { font-size: 11px; color: #8a8f98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+  .live-login-call { font-size: 12px; color: #ff8a8a; cursor: pointer; text-decoration: underline; margin-left: 6px; }
+  .ctl-highlight { outline: 2px solid #ffb454; outline-offset: 2px; }
+  .live-counts { flex-basis: 100%; font-size: 12px; color: #c8ccd4; }
+  .live-chart-wrap { flex-basis: 100%; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .live-chart-wrap canvas { flex-shrink: 0; width: 64px !important; height: 64px !important; }
+  details.history { margin-top: 8px; border: 1px solid #242832; border-radius: 10px; background: #14161c; }
+  details.history > summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 600; color: #c8ccd4; user-select: none; list-style: none; }
+  details.history > summary::-webkit-details-marker { display: none; }
+  details.history > summary::before { content: '▸ '; color: #8a8f98; }
+  details.history[open] > summary::before { content: '▾ '; }
+  details.history > .history-body { padding: 0 16px 16px; }
+</style>
+</head>
+<body>
+  <h1>hh-auto-otkliki — панель управления</h1>
+  <div class="sub">Локально (127.0.0.1). Фокус — текущий прогон: что программа делает сейчас. Агрегаты за всю историю — в блоке «История» ниже.</div>
+  <div class="panel" style="margin-bottom: 24px">
+    <h2>Управление задачами</h2>
+    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. «Старт» = <b>реальный (LIVE) прогон</b> на hh.ru, запускается сразу без подтверждения. «Войти» открывает окно входа hh.ru; после входа нажмите «Готово (сохранить вход)».</div>
+    <div class="ctl-search" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+      <span class="sub">Поиск для «Отклики»:</span>
+      <input id="srch-text" type="text" placeholder="text (напр. DevOps)" value="DevOps" style="flex: 1; min-width: 160px">
+      <input id="srch-area" type="text" placeholder="area" value="1" title="регион hh.ru (1 = Москва)" style="width: 70px">
+      <input id="srch-limit" type="number" min="1" placeholder="limit" value="200" title="число откликов" style="width: 90px">
+    </div>
+    <div id="controlBody" class="muted">Загрузка…</div>
+  </div>
+  <div class="panel" style="margin-bottom: 24px">
+    <h2>Сейчас</h2>
+    <div class="sub" style="margin-bottom: 12px">Живое состояние прогонов: текущая задача/шаг/прогресс, индикатор живости (<span class="live-dot lv-working"></span> работает · <span class="live-dot lv-stalled"></span> завис · <span class="live-dot lv-captcha"></span> капча · <span class="live-dot lv-limit"></span> лимит откликов · <span class="live-dot lv-logged-out"></span> сессия разлогинена · <span class="live-dot lv-idle"></span> простой), ресурсы и токены/стоимость за сегодня. Живое обновление (&lt; 0,5 с).</div>
+    <div id="liveRes" class="muted" style="margin-bottom: 10px"></div>
+    <div id="liveBody" class="muted">Загрузка…</div>
+  </div>
+  <details class="history" id="historyBlock">
+    <summary>История за всё время (агрегаты, графики)</summary>
+    <div class="history-body">
+      <div class="sub">Накопительная статистика за всю историю логов. <span id="gen"></span> <button onclick="load()">Обновить</button></div>
+      <div class="cards" id="cards"></div>
+      <div class="grid">
+        <div class="panel"><h2>Отклики по дням</h2><canvas id="byDay"></canvas></div>
+        <div class="panel"><h2>Отклики по статусу</h2><canvas id="byStatus"></canvas></div>
+        <div class="panel"><h2>Отклики по аккаунтам</h2><canvas id="byAccount"></canvas></div>
+        <div class="panel"><h2>Воронка конверсии</h2><canvas id="funnel"></canvas></div>
+        <div class="panel"><h2>Скоринг (локально / модель / кэш)</h2><canvas id="scoring"></canvas></div>
+        <div class="panel"><h2>Сообщения по дням</h2><canvas id="messages"></canvas></div>
+        <div class="panel" style="grid-column: 1 / -1"><h2>Алерты демона (последние)</h2><div id="alertsList"></div></div>
+      </div>
+    </div>
+  </details>
+<script src="app.js"></script>
+</body>
+</html>

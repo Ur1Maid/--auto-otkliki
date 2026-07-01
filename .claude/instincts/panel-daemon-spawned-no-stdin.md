@@ -51,3 +51,8 @@ terminal. Until then, the panel Live toggle is the single consent point — trea
 launch as authorizing the whole autonomous run. See [[hh-chatik-inline-not-iframe]] and
 [[hh-selectors-text-based]]: a passing mock unit test does NOT prove the live flow works —
 the real proof is a supervised dry-run→small-live run (`verify-live-flow`).
+
+Note (2026-07-01, M20): the standalone HTTP panel server (`src/dashboard.js`) was removed.
+The same start/stop/login-done logic now lives in `src/lib/dashboardData.js` +
+`src/lib/dashboardActions.js`, called directly (IPC, no HTTP) from `src/electron-main.js`.
+The `nodeSpawnEnv`/stdin rules above are unchanged — `taskRunner.js` still does the spawning.

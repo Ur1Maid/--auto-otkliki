@@ -1,85 +1,54 @@
-// src/electron-main.js — Electron-обёртка вокруг локального дашборда (M15.1–M15.3).
+// src/electron-main.js — Electron-обёртка панели hh-auto-otkliki: единственный UI (M20).
 //
 // Что делает:
-//   - запускает дочерний процесс `node src/dashboard.js --port <PORT>` (сервер не меняется);
-//   - ждёт, пока порт 127.0.0.1:<PORT> начнёт принимать соединения;
-//   - открывает BrowserWindow 1280×800 с http://127.0.0.1:<PORT>;
-//   - создаёт Tray-иконку (M15.2): меню «Открыть панель», «Стоп всех задач», «Выйти»;
-//   - закрытие окна сворачивает в трей, приложение живёт до «Выйти» или смерти сервера;
-//   - «Запускать при старте» (M15.3): checkbox-пункт меню через app.setLoginItemSettings.
+//   - НЕ поднимает HTTP-сервер и не открывает порт: рендерер грузит локальный
+//     src/ui/index.html через loadFile, а данные/команды идут по IPC (contextIsolation +
+//     preload-мост src/preload.cjs, canal 'dash:*').
+//   - Собирает метрики/живой снимок напрямую в main-процессе (lib/dashboardData.js) и
+//     выполняет команды старт/стоп/логин через lib/dashboardActions.js поверх общего
+//     lib/taskRunner.js (тот же реестр задач, что был у HTTP-панели).
+//   - Периодически (раз в ~400 мс) проверяет mtime файлов статуса/ресурсов и при изменении
+//     пушит свежий снимок «Сейчас» в рендерер (замена SSE-стрима dashboard.js).
+//   - Создаёт Tray-иконку: меню «Открыть панель», «Стоп всех задач», «Запускать при старте», «Выйти».
+//   - Закрытие окна сворачивает в трей, приложение живёт до «Выйти».
 //
-// Electron — только devDependency: production-поведение CLI (review/daemon/dashboard) не меняется.
-// Сервер по-прежнему слушает ТОЛЬКО 127.0.0.1 — Electron лишь оборачивает его в окно.
+// Electron — только devDependency: production-поведение CLI (review/daemon) не меняется.
+// Нет открытого порта — управление доступно только из этого приложения.
 
-import { app, BrowserWindow, Tray, Menu, nativeImage } from 'electron';
-import { spawn } from 'node:child_process';
-import { createConnection } from 'node:net';
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import process from 'node:process';
 
-import { nodeSpawnEnv } from './lib/spawnEnv.js';
+import { createTaskRunner } from './lib/taskRunner.js';
+import { collectMetrics, collectLive, collectStreamMtimes, listAccounts } from './lib/dashboardData.js';
+import {
+  handleStart,
+  handleStop,
+  handleLoginDone,
+  handleTasks,
+  handleAccounts,
+  defaultWriteLoginDone,
+} from './lib/dashboardActions.js';
+import { buildMtimeSignature, signatureChanged } from './lib/streamWatcher.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const HOST = '127.0.0.1';
-const PORT = Number(process.env.DASHBOARD_PORT) || 8787;
-const PANEL_URL = `http://${HOST}:${PORT}`;
 
-let serverProc = null;
+// Период опроса mtime файлов статуса/ресурсов для живого пуша «Сейчас» (было SSE, M13.3).
+const STREAM_POLL_MS = 400;
+
+// Свой реестр задач: одна задача данного типа на аккаунт, трекинг PID (M11.8).
+// Аудит-лог запусков/остановок (M11.9) — только task/account/live/pid, без ключа/PII.
+const runner = createTaskRunner({ log: (msg) => console.log(msg) });
+
 let mainWindow = null;
 let tray = null;
+let livePushTimer = null;
 
 // true только при реальном выходе (через «Выйти» в меню трея), чтобы отличить
 // закрытие окна (→ скрыть в трей) от настоящего завершения приложения.
 let isQuitting = false;
 
-/** Спавнит дочерний сервер дашборда тем же Node, что и Electron-main. */
-function startServer() {
-  const dashboard = join(here, 'dashboard.js');
-  const proc = spawn(process.execPath, [dashboard, '--port', String(PORT)], {
-    stdio: 'inherit',
-    env: nodeSpawnEnv(),
-  });
-  proc.on('exit', () => {
-    // Сервер умер — нет смысла держать окно на мёртвом порту.
-    // isQuitting=true, иначе close-хендлер окна перехватит quit и свернёт в трей.
-    serverProc = null;
-    isQuitting = true;
-    app.quit();
-  });
-  proc.on('error', (err) => {
-    console.error(`[electron] не удалось запустить сервер: ${err.message}`);
-    serverProc = null;
-    isQuitting = true;
-    app.quit();
-  });
-  return proc;
-}
-
-/** Ждёт, пока host:port начнёт принимать TCP-соединения (сервер поднялся). */
-function waitForPort(host, port, { timeoutMs = 15000, intervalMs = 250 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const tryOnce = () => {
-      const socket = createConnection({ host, port });
-      socket.once('connect', () => {
-        socket.destroy();
-        resolve();
-      });
-      socket.once('error', () => {
-        socket.destroy();
-        if (Date.now() > deadline) {
-          reject(new Error(`порт ${host}:${port} не открылся за ${timeoutMs} мс`));
-        } else {
-          setTimeout(tryOnce, intervalMs);
-        }
-      });
-    };
-    tryOnce();
-  });
-}
-
-/** Создаёт главное окно и загружает в него локальную панель. */
+/** Создаёт главное окно и загружает в него локальный HTML панели (без сети). */
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -88,9 +57,16 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      preload: join(here, 'preload.cjs'),
     },
   });
-  await mainWindow.loadURL(PANEL_URL);
+  // Защита привилегированного окна (defense-in-depth, security-review): панель — локальный
+  // UI, ей незачем куда-либо навигировать или открывать новые окна. Блокируем и то и другое,
+  // чтобы внедрённый/CDN-скрипт не увёл окно на внешний origin.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  await mainWindow.loadFile(join(here, 'ui', 'index.html'));
   // Закрытие окна → скрыть в трей (не завершать приложение).
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
@@ -101,14 +77,6 @@ async function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-}
-
-/** Завершает дочерний сервер, если он ещё жив. */
-function stopServer() {
-  if (serverProc && !serverProc.killed) {
-    serverProc.kill();
-  }
-  serverProc = null;
 }
 
 /**
@@ -125,43 +93,29 @@ function buildTrayIcon() {
 }
 
 /**
- * Останавливает все запущенные задачи: получает список аккаунтов через
- * GET /api/accounts, затем шлёт POST /api/stop по каждому.
- * Запросы идут из Electron main process (Node), без браузерного Origin.
- * Выставляем Origin вручную, чтобы isLoopbackRequest в dashboard.js пропустил.
- * Лучший вариант: оборачиваем в try/catch, никогда не бросаем наружу.
+ * Останавливает все запущенные задачи: берёт список аккаунтов напрямую (listAccounts)
+ * и стопит каждый через runner.stop — без HTTP, без fetch. Best-effort: одна упавшая
+ * остановка не мешает остальным, наружу никогда не бросает.
  */
 async function stopAllTasks() {
-  const loopbackOrigin = `http://${HOST}:${PORT}`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'Origin': loopbackOrigin,
-  };
+  let accounts = [];
   try {
-    const resp = await fetch(`${PANEL_URL}/api/accounts`, { headers });
-    if (!resp.ok) {
-      console.error(`[electron] /api/accounts вернул ${resp.status}`);
-      return;
-    }
-    const { accounts } = await resp.json();
-    if (!Array.isArray(accounts) || accounts.length === 0) {
-      console.log('[electron] нет аккаунтов для остановки');
-      return;
-    }
-    for (const account of accounts) {
-      try {
-        const stopResp = await fetch(`${PANEL_URL}/api/stop`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ account }),
-        });
-        console.log(`[electron] стоп ${account}: ${stopResp.status}`);
-      } catch (err) {
-        console.error(`[electron] ошибка стопа ${account}: ${err.message}`);
-      }
-    }
+    accounts = await listAccounts();
   } catch (err) {
     console.error(`[electron] ошибка получения аккаунтов: ${err.message}`);
+    return;
+  }
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    console.log('[electron] нет аккаунтов для остановки');
+    return;
+  }
+  for (const account of accounts) {
+    try {
+      const result = runner.stop({ account });
+      console.log(`[electron] стоп ${account}: ${result && result.status}`);
+    } catch (err) {
+      console.error(`[electron] ошибка стопа ${account}: ${err.message}`);
+    }
   }
 }
 
@@ -234,15 +188,58 @@ function createTray() {
   });
 }
 
+/** Регистрирует IPC-обработчики 'dash:*' — единственный канал рендерера к данным/командам. */
+function registerIpc() {
+  ipcMain.handle('dash:metrics', () => collectMetrics());
+  ipcMain.handle('dash:live', () => collectLive());
+  ipcMain.handle('dash:accounts', async () => (await handleAccounts(listAccounts)).body);
+  ipcMain.handle('dash:tasks', () => handleTasks(runner).body);
+  ipcMain.handle('dash:start', (_e, payload) => handleStart(runner, payload || {}).body);
+  ipcMain.handle('dash:stop', (_e, payload) => handleStop(runner, payload || {}).body);
+  ipcMain.handle('dash:login-done', async (_e, payload) => (await handleLoginDone(defaultWriteLoginDone, payload || {})).body);
+}
+
+/**
+ * Живой пуш блока «Сейчас» (было SSE в dashboard.js, M13.3): раз в ~400 мс сверяем mtime
+ * статус/ресурс-файлов и при изменении отправляем свежий снимок в рендерер через
+ * webContents.send. Best-effort — сбой чтения не роняет таймер (следующий тик повторит).
+ */
+function startLivePush() {
+  let busy = false;
+  let lastSig = null;
+
+  const tick = async (force) => {
+    if (busy) return; // не наслаиваем тики, если чтение/collectLive затянулось
+    busy = true;
+    try {
+      const sig = buildMtimeSignature(await collectStreamMtimes());
+      if (force || signatureChanged(lastSig, sig)) {
+        lastSig = sig;
+        const data = await collectLive();
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+          mainWindow.webContents.send('dash:live-update', data);
+        }
+      }
+    } catch {
+      // best-effort — сбой чтения не роняет пуш (следующий тик повторит)
+    } finally {
+      busy = false;
+    }
+  };
+
+  tick(true);
+  livePushTimer = setInterval(() => tick(false), STREAM_POLL_MS);
+  if (typeof livePushTimer.unref === 'function') livePushTimer.unref(); // не держим event loop
+}
+
 app.whenReady().then(async () => {
-  serverProc = startServer();
   try {
-    await waitForPort(HOST, PORT);
+    registerIpc();
     createTray();
     await createWindow();
+    startLivePush();
   } catch (err) {
     console.error(`[electron] не удалось открыть панель: ${err.message}`);
-    stopServer();
     isQuitting = true;
     app.quit();
   }
@@ -255,5 +252,5 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  stopServer();
+  if (livePushTimer) clearInterval(livePushTimer);
 });

@@ -10,7 +10,6 @@
     "review:auto": "node src/review.js --limit 200",
     "review:manual": "node src/review.js --manual",
     "daemon": "node src/daemon.js",
-    "dashboard": "node src/dashboard.js",
     "electron": "electron src/electron-main.js",
     "check": "node src/check.js",
     "test": "node --test",

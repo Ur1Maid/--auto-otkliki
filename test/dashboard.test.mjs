@@ -1,35 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePort, collectMetrics, collectLive, createServer, isLoopbackRequest, listAccounts } from '../src/dashboard.js';
-
-// --- parsePort ---
-test('parsePort: дефолт 8787', () => {
-  const saved = process.env.DASHBOARD_PORT;
-  delete process.env.DASHBOARD_PORT;
-  assert.equal(parsePort([]), 8787);
-  if (saved !== undefined) process.env.DASHBOARD_PORT = saved;
-});
-
-test('parsePort: --port задаёт порт', () => {
-  assert.equal(parsePort(['--port', '9000']), 9000);
-});
-
-test('parsePort: мусорный --port → дефолт', () => {
-  const saved = process.env.DASHBOARD_PORT;
-  delete process.env.DASHBOARD_PORT;
-  assert.equal(parsePort(['--port', 'abc']), 8787);
-  assert.equal(parsePort(['--port', '0']), 8787);
-  assert.equal(parsePort(['--port', '70000']), 8787);
-  if (saved !== undefined) process.env.DASHBOARD_PORT = saved;
-});
-
-test('parsePort: env DASHBOARD_PORT', () => {
-  const saved = process.env.DASHBOARD_PORT;
-  process.env.DASHBOARD_PORT = '5555';
-  assert.equal(parsePort([]), 5555);
-  if (saved === undefined) delete process.env.DASHBOARD_PORT;
-  else process.env.DASHBOARD_PORT = saved;
-});
+import { collectMetrics, collectLive, listAccounts } from '../src/lib/dashboardData.js';
+import { handleStart, handleStop, handleLoginDone, handleTasks } from '../src/lib/dashboardActions.js';
 
 // --- collectMetrics (smoke: читает реальный logs/, не должен бросать) ---
 test('collectMetrics: возвращает агрегаты с нужными ключами, не бросает', async () => {
@@ -50,170 +22,6 @@ test('collectLive: возвращает живой снимок с нужным�
   assert.ok(Array.isArray(v.accounts));
   assert.ok('latest' in v.resources && 'recent' in v.resources);
   assert.ok(Array.isArray(v.resources.recent));
-});
-
-test('createServer: GET /api/live → 200 JSON', async () => {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/live`);
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.ok('accounts' in json);
-    assert.ok(Array.isArray(json.accounts));
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('createServer: GET /api/stream → text/event-stream с начальным снимком (M13.3)', async () => {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  const ac = new AbortController();
-  const killer = setTimeout(() => ac.abort(), 5000);
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/stream`, { signal: ac.signal });
-    assert.equal(res.status, 200);
-    assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
-    // Читаем поток до первого полного SSE-фрейма (data: ...\n\n).
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (!buf.includes('\n\n')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) buf += dec.decode(value, { stream: true });
-    }
-    const frame = buf.split('\n\n')[0];
-    assert.match(frame, /^data: /);
-    const json = JSON.parse(frame.replace(/^data: /, ''));
-    assert.ok('accounts' in json);
-    assert.ok(Array.isArray(json.accounts));
-    await reader.cancel();
-  } finally {
-    clearTimeout(killer);
-    ac.abort();
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-// --- createServer (smoke: /api/metrics отдаёт валидный JSON) ---
-test('createServer: GET /api/metrics → 200 JSON', async () => {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/metrics`);
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.ok('responses' in json);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('createServer: GET / → 200 HTML', async () => {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/`);
-    assert.equal(res.status, 200);
-    const text = await res.text();
-    assert.ok(text.includes('hh-auto-otkliki'));
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-// --- Управляющий слой M11.8 (через инъецированный фейковый runner) ---
-
-/** Поднимает сервер на loopback с инъецированным runner; вызывает fn(baseUrl). */
-async function withServer(runner, fn) {
-  const server = createServer({ runner });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-}
-
-test('POST /api/start: проксирует в runner.start и возвращает status/тело', async () => {
-  const calls = [];
-  const runner = {
-    start: (opts) => { calls.push(opts); return { ok: true, status: 200, account: opts.account, task: opts.task, pid: 1, live: opts.live }; },
-    stop: () => ({ ok: false, status: 404 }),
-    list: () => [],
-  };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/start`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task: 'messages', account: 'acc1' }),
-    });
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.equal(json.ok, true);
-    assert.equal(json.account, 'acc1');
-    // status не дублируется в тело.
-    assert.equal('status' in json, false);
-  });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].live, false); // дефолт dry-run
-});
-
-test('POST /api/start: live прокидывается только как строгий true', async () => {
-  const seen = [];
-  const runner = { start: (o) => { seen.push(o.live); return { ok: true, status: 200 }; }, stop: () => ({}), list: () => [] };
-  await withServer(runner, async (base) => {
-    await fetch(`${base}/api/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task: 'apply', account: 'a', live: 'yes' }) });
-    await fetch(`${base}/api/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task: 'apply', account: 'a', live: true }) });
-  });
-  assert.deepEqual(seen, [false, true]);
-});
-
-test('POST /api/start: дубль возвращает 409 из runner', async () => {
-  const runner = { start: () => ({ ok: false, status: 409, reason: 'занят' }), stop: () => ({}), list: () => [] };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task: 'messages', account: 'acc1' }) });
-    assert.equal(res.status, 409);
-    const json = await res.json();
-    assert.equal(json.ok, false);
-  });
-});
-
-test('POST /api/start: битый JSON → 400', async () => {
-  const runner = { start: () => { throw new Error('не должно вызваться'); }, stop: () => ({}), list: () => [] };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{не json' });
-    assert.equal(res.status, 400);
-  });
-});
-
-test('POST /api/stop: проксирует в runner.stop', async () => {
-  const calls = [];
-  const runner = { start: () => ({}), stop: (o) => { calls.push(o); return { ok: true, status: 200, account: o.account, task: 'messages' }; }, list: () => [] };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: 'acc1' }) });
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.equal(json.ok, true);
-  });
-  assert.deepEqual(calls, [{ account: 'acc1' }]);
-});
-
-test('POST /api/stop: с task-фильтром проксирует task в runner.stop (M12.7)', async () => {
-  const calls = [];
-  const runner = { start: () => ({}), stop: (o) => { calls.push(o); return { ok: true, status: 200, account: o.account, task: o.task }; }, list: () => [] };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: 'acc1', task: 'apply' }) });
-    assert.equal(res.status, 200);
-  });
-  assert.deepEqual(calls, [{ account: 'acc1', task: 'apply' }]);
 });
 
 // --- listAccounts (источник аккаунтов для блока «Управление» M11.10) ---
@@ -237,142 +45,103 @@ test('listAccounts: не-массив → []', async () => {
   assert.deepEqual(await listAccounts({ readdirFn }), []);
 });
 
-test('GET /api/accounts → { accounts: [...] }', async () => {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/accounts`);
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.ok(Array.isArray(json.accounts));
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
+// ============================================================
+// handleStart / handleStop / handleTasks (было POST /api/start и /api/stop, GET /api/tasks) —
+// теперь чистые обработчики поверх инъецированного runner-стаба, без HTTP/сервера.
+// ============================================================
+
+test('handleStart: проксирует в runner.start и возвращает status/тело', () => {
+  const calls = [];
+  const runner = {
+    start: (opts) => { calls.push(opts); return { ok: true, status: 200, account: opts.account, task: opts.task, pid: 1, live: opts.live }; },
+    stop: () => ({ ok: false, status: 404 }),
+    list: () => [],
+  };
+  const { status, body } = handleStart(runner, { task: 'messages', account: 'acc1' });
+  assert.equal(status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.account, 'acc1');
+  // status не дублируется в тело.
+  assert.equal('status' in body, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].live, false); // дефолт dry-run
 });
 
-// --- isLoopbackRequest (защита управляющих эндпоинтов) ---
-test('isLoopbackRequest: петлевой Host без Origin → true', () => {
-  assert.equal(isLoopbackRequest({ headers: { host: '127.0.0.1:8787' } }), true);
-  assert.equal(isLoopbackRequest({ headers: { host: 'localhost:8787' } }), true);
-  assert.equal(isLoopbackRequest({ headers: { host: '[::1]:8787' } }), true);
+test('handleStart: live прокидывается только как строгий true', () => {
+  const seen = [];
+  const runner = { start: (o) => { seen.push(o.live); return { ok: true, status: 200 }; }, stop: () => ({}), list: () => [] };
+  handleStart(runner, { task: 'apply', account: 'a', live: 'yes' });
+  handleStart(runner, { task: 'apply', account: 'a', live: true });
+  assert.deepEqual(seen, [false, true]);
 });
 
-test('isLoopbackRequest: не-петлевой Host → false', () => {
-  assert.equal(isLoopbackRequest({ headers: { host: 'evil.com' } }), false);
-  assert.equal(isLoopbackRequest({ headers: { host: '192.168.1.5:8787' } }), false);
-  assert.equal(isLoopbackRequest({ headers: {} }), false);
+test('handleStart: дубль возвращает 409 из runner', () => {
+  const runner = { start: () => ({ ok: false, status: 409, reason: 'занят' }), stop: () => ({}), list: () => [] };
+  const { status, body } = handleStart(runner, { task: 'messages', account: 'acc1' });
+  assert.equal(status, 409);
+  assert.equal(body.ok, false);
 });
 
-test('isLoopbackRequest: cross-origin Origin → false, же-origin → true', () => {
-  assert.equal(isLoopbackRequest({ headers: { host: '127.0.0.1:8787', origin: 'http://evil.com' } }), false);
-  assert.equal(isLoopbackRequest({ headers: { host: '127.0.0.1:8787', origin: 'http://127.0.0.1:8787' } }), true);
-  assert.equal(isLoopbackRequest({ headers: { host: '127.0.0.1:8787', origin: 'http://localhost:9999' } }), true);
-  // непарсимый Origin → отклоняем
-  assert.equal(isLoopbackRequest({ headers: { host: '127.0.0.1:8787', origin: 'не-url' } }), false);
+test('handleStop: проксирует в runner.stop', () => {
+  const calls = [];
+  const runner = { start: () => ({}), stop: (o) => { calls.push(o); return { ok: true, status: 200, account: o.account, task: 'messages' }; }, list: () => [] };
+  const { status, body } = handleStop(runner, { account: 'acc1' });
+  assert.equal(status, 200);
+  assert.equal(body.ok, true);
+  assert.deepEqual(calls, [{ account: 'acc1' }]);
 });
 
-test('POST /api/start: cross-origin Origin → 403, runner не вызывается', async () => {
-  const runner = { start: () => { throw new Error('не должно вызваться'); }, stop: () => ({}), list: () => [] };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/start`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: 'http://evil.com' },
-      body: JSON.stringify({ task: 'apply', account: 'a', live: true }),
-    });
-    assert.equal(res.status, 403);
-  });
+test('handleStop: с task-фильтром проксирует task в runner.stop (M12.7)', () => {
+  const calls = [];
+  const runner = { start: () => ({}), stop: (o) => { calls.push(o); return { ok: true, status: 200, account: o.account, task: o.task }; }, list: () => [] };
+  const { status } = handleStop(runner, { account: 'acc1', task: 'apply' });
+  assert.equal(status, 200);
+  assert.deepEqual(calls, [{ account: 'acc1', task: 'apply' }]);
 });
 
-test('GET /api/tasks: отдаёт снимок runner.list', async () => {
+test('handleTasks: отдаёт снимок runner.list', () => {
   const runner = { start: () => ({}), stop: () => ({}), list: () => [{ account: 'acc1', task: 'messages', pid: 9, live: false, startedAt: 1 }] };
-  await withServer(runner, async (base) => {
-    const res = await fetch(`${base}/api/tasks`);
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.equal(json.tasks.length, 1);
-    assert.equal(json.tasks[0].account, 'acc1');
-  });
+  const { status, body } = handleTasks(runner);
+  assert.equal(status, 200);
+  assert.equal(body.tasks.length, 1);
+  assert.equal(body.tasks[0].account, 'acc1');
 });
 
 // ============================================================
-// /api/login-done (M19.5): sentinel завершения панельного логина
+// handleLoginDone (M19.5): sentinel завершения панельного логина
 // ============================================================
 
-/** Минимальный runner-стаб для тестов login-done (не нужен реальный runner). */
-const minimalRunner = { start: () => ({}), stop: () => ({}), list: () => [] };
-
-/** Поднимает сервер с инъецированным writeLoginDone (без реального IO); вызывает fn(baseUrl). */
-async function withLoginServer(writeLoginDone, fn) {
-  const server = createServer({ runner: minimalRunner, writeLoginDone });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-}
-
-test('POST /api/login-done: с account → 200, вызывает writeLoginDone(account)', async () => {
+test('handleLoginDone: с account → 200, вызывает writeLoginDone(account)', async () => {
   const called = [];
   const writeLoginDone = async (acc) => { called.push(acc); };
-  await withLoginServer(writeLoginDone, async (base) => {
-    const res = await fetch(`${base}/api/login-done`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: 'acc1' }),
-    });
-    assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.equal(json.ok, true);
-    assert.equal(json.account, 'acc1');
-  });
+  const { status, body } = await handleLoginDone(writeLoginDone, { account: 'acc1' });
+  assert.equal(status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.account, 'acc1');
   assert.deepEqual(called, ['acc1'], 'writeLoginDone должен быть вызван с acc1');
 });
 
-test('POST /api/login-done: пустой account → 400, writeLoginDone не вызывается', async () => {
+test('handleLoginDone: пустой account → 400, writeLoginDone не вызывается', async () => {
   const called = [];
   const writeLoginDone = async (acc) => { called.push(acc); };
-  await withLoginServer(writeLoginDone, async (base) => {
-    const res = await fetch(`${base}/api/login-done`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: '' }),
-    });
-    assert.equal(res.status, 400);
-    const json = await res.json();
-    assert.equal(json.ok, false);
-  });
+  const { status, body } = await handleLoginDone(writeLoginDone, { account: '' });
+  assert.equal(status, 400);
+  assert.equal(body.ok, false);
   assert.equal(called.length, 0, 'writeLoginDone не должен вызываться при пустом account');
 });
 
-test('POST /api/login-done: отсутствующий account → 400, writeLoginDone не вызывается', async () => {
+test('handleLoginDone: отсутствующий account → 400, writeLoginDone не вызывается', async () => {
   const called = [];
   const writeLoginDone = async (acc) => { called.push(acc); };
-  await withLoginServer(writeLoginDone, async (base) => {
-    const res = await fetch(`${base}/api/login-done`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    assert.equal(res.status, 400);
-    const json = await res.json();
-    assert.equal(json.ok, false);
-  });
+  const { status, body } = await handleLoginDone(writeLoginDone, {});
+  assert.equal(status, 400);
+  assert.equal(body.ok, false);
   assert.equal(called.length, 0);
 });
 
-test('POST /api/login-done: writeLoginDone бросает → 500', async () => {
+test('handleLoginDone: writeLoginDone бросает → 500', async () => {
   const writeLoginDone = async () => { throw new Error('диск заполнен'); };
-  await withLoginServer(writeLoginDone, async (base) => {
-    const res = await fetch(`${base}/api/login-done`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: 'acc1' }),
-    });
-    assert.equal(res.status, 500);
-    const json = await res.json();
-    assert.equal(json.ok, false);
-  });
+  const { status, body } = await handleLoginDone(writeLoginDone, { account: 'acc1' });
+  assert.equal(status, 500);
+  assert.equal(body.ok, false);
 });
