@@ -438,6 +438,7 @@ const PAGE = `<!doctype html>
   .ctl-acc { font-weight: 600; min-width: 120px; }
   .ctl-btns { display: flex; gap: 6px; }
   .ctl-stop { border-color: #5a1f1f; }
+  .ctl-login-need { border-color: #ff6b6b; box-shadow: 0 0 0 1px #ff6b6b; }
   .ctl-status { margin-left: auto; font-size: 12px; }
   .st-run { color: #7bd88f; }
   .st-stop { color: #ffb454; }
@@ -475,7 +476,7 @@ const PAGE = `<!doctype html>
   <div class="sub">Локально (127.0.0.1). Фокус — текущий прогон: что программа делает сейчас. Агрегаты за всю историю — в блоке «История» ниже.</div>
   <div class="panel" style="margin-bottom: 24px">
     <h2>Управление задачами</h2>
-    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. «Старт» = <b>реальный (LIVE) прогон</b> на hh.ru, запускается сразу без подтверждения.</div>
+    <div class="sub" style="margin-bottom: 12px">По аккаунту: Отклики / Сообщения / Резюме — каждая запускается и останавливается <b>независимо</b>. «Старт» = <b>реальный (LIVE) прогон</b> на hh.ru, запускается сразу без подтверждения. «Войти» открывает окно входа hh.ru; после входа нажмите «Готово (сохранить вход)».</div>
     <div class="ctl-search" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
       <span class="sub">Поиск для «Отклики»:</span>
       <input id="srch-text" type="text" placeholder="text (напр. DevOps)" value="DevOps" style="flex: 1; min-width: 160px">
@@ -594,6 +595,8 @@ const TASKS = ['apply', 'messages', 'resume'];
 let controlAccounts = [];
 // Ключ: acc+'\0'+task → true (показать «остановлено» до следующего обновления).
 const controlStopped = {};
+// Аккаунты с state='logged_out' (из блока «Сейчас») — подсветка кнопки «Войти» (M19.6).
+const loggedOutAccounts = {};
 
 async function loadControl() {
   let accRes, taskRes;
@@ -643,6 +646,33 @@ async function loadControl() {
         '<div class="ctl-status ' + statusCls + '">' + statusTxt + '</div>' +
         '</div>';
     }).join('') +
+    // Строка «Вход» (M19.6): Войти / Готово / Стоп — отдельно от откликов/сообщений/резюме.
+    (() => {
+      const key = acc + '\0' + 'login';
+      const run = byAccTask[key];
+      const running = !!run;
+      let stTxt, stCls;
+      if (running) {
+        stTxt = 'идёт вход' + (run.pid != null ? ' · pid ' + esc(run.pid) : '');
+        stCls = 'st-run';
+      } else if (controlStopped[key]) {
+        stTxt = 'остановлено'; stCls = 'st-stop';
+      } else {
+        stTxt = 'простаивает'; stCls = 'st-idle';
+      }
+      // Подсветка «Войти», когда сессия разлогинена (данные из блока «Сейчас»).
+      const need = !!loggedOutAccounts[acc] && !running;
+      return '<div class="ctl-row">' +
+        '<div style="min-width: 90px; font-size: 13px">Вход</div>' +
+        '<button class="ctl-login' + (need ? ' ctl-login-need' : '') + '" data-action="login" data-idx="' + i + '"' +
+          (running ? ' disabled' : '') + '>Войти</button>' +
+        '<button data-action="login-done" data-idx="' + i + '"' +
+          (running ? '' : ' disabled') + '>Готово (сохранить вход)</button>' +
+        '<button class="ctl-stop" data-action="stop" data-idx="' + i + '" data-task="login"' +
+          (running ? '' : ' disabled') + '>Стоп</button>' +
+        '<div class="ctl-status ' + stCls + '">' + stTxt + '</div>' +
+        '</div>';
+    })() +
     '</div>'
   ).join('');
 
@@ -650,6 +680,10 @@ async function loadControl() {
     b.addEventListener('click', () => startTask(+b.dataset.idx, b.dataset.task)));
   el.querySelectorAll('button[data-action="stop"]').forEach(b =>
     b.addEventListener('click', () => stopTask(+b.dataset.idx, b.dataset.task)));
+  el.querySelectorAll('button[data-action="login"]').forEach(b =>
+    b.addEventListener('click', () => startTask(+b.dataset.idx, 'login')));
+  el.querySelectorAll('button[data-action="login-done"]').forEach(b =>
+    b.addEventListener('click', () => loginDone(+b.dataset.idx)));
 }
 
 async function startTask(i, task) {
@@ -695,6 +729,23 @@ async function stopTask(i, task) {
   loadControl();
 }
 
+// «Готово (сохранить вход)» — сигнал завершения логина (M19.6): пишет sentinel через /api/login-done.
+async function loginDone(i) {
+  const acc = controlAccounts[i];
+  if (!acc) return;
+  try {
+    const res = await fetch('/api/login-done', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: acc }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) alert('Не удалось сохранить вход: ' + (json.error || res.status));
+  } catch (e) {
+    alert('Ошибка сохранения входа');
+  }
+  loadControl();
+}
+
 // --- Блок «Сейчас» (M11.11, обновлён M12.8): живое состояние — одна строка на (аккаунт, задачу) ---
 const LIVENESS_LABEL = { working: 'работает', stalled: 'завис', captcha: 'капча', limit: 'лимит откликов', logged_out: 'разлогин', idle: 'простой' };
 const LIVE_TASK_LABEL = { apply: 'Отклики', messages: 'Сообщения', resume: 'Резюме' };
@@ -722,6 +773,9 @@ async function loadLive() {
 
 function renderLive(v) {
   if (!v) return;
+  // Пересобираем набор разлогиненных аккаунтов — подсветка кнопки «Войти» в «Управлении» (M19.6).
+  for (const k of Object.keys(loggedOutAccounts)) delete loggedOutAccounts[k];
+  for (const a of (v.accounts || [])) if ((a.liveness || 'idle') === 'logged_out') loggedOutAccounts[a.account] = true;
   // Ресурсы + токены/стоимость за сегодня (из последнего снимка метрик).
   const r = v.resources && v.resources.latest;
   const resTxt = r
@@ -833,7 +887,7 @@ function renderLive(v) {
 }
 
 // Скролл/подсветка блока «Управление» аккаунта из призыва «→ Войти» (M19.3).
-// Кнопка входа появится здесь в M19.6 — пока ведём к управлению аккаунтом.
+// Кнопка «Войти» живёт здесь (M19.6) и подсвечивается при разлогине (ctl-login-need).
 function scrollToLogin(account) {
   const container = document.getElementById(accCtlId(account));
   const target = container || document.getElementById('controlBody');
