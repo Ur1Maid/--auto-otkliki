@@ -7,7 +7,7 @@ import js from '@eslint/js';
 
 export default [
   {
-    ignores: ['node_modules/**', '.claude/**', 'ralph/logs/**', 'logs/**', 'data/**', '.hh-session/**'],
+    ignores: ['node_modules/**', '.claude/**', 'ralph/logs/**', 'logs/**', 'data/**', '.hh-session/**', 'src/ui/vendor/**'],
   },
   js.configs.recommended,
   {

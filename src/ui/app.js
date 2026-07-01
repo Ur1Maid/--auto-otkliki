@@ -396,6 +396,9 @@ if (historyBlock) historyBlock.addEventListener('toggle', () => {
   if (historyBlock.open) { if (lastMetrics) renderHistory(); else load(); }
 });
 
+const refreshBtn = document.getElementById('refreshBtn');
+if (refreshBtn) refreshBtn.addEventListener('click', () => load());
+
 load();
 loadControl();
 setInterval(loadControl, 1000);
