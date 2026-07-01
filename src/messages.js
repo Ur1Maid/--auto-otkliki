@@ -18,7 +18,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { CHAT_SELECTORS, CHATIK_IFRAME_SELECTOR, CHATIK_URL_PATTERN } from './lib/selectors.js';
-import { parseThreadList, parseThreadMessages } from './lib/chatParse.js';
+import { parseThreadList, parseThreadMessages, mergeThreadsById } from './lib/chatParse.js';
 import { decideReply } from './lib/replyPolicy.js';
 import { lastEmployerMessage } from './lib/chatParse.js';
 import { generateReply } from './lib/replyGenerate.js';
@@ -87,6 +87,98 @@ export async function listThreads(frame) {
     .innerHTML()
     .catch(() => '');
   return parseThreadList(html);
+}
+
+/**
+ * Включает фильтр «только непрочитанные» в списке тредов chatik (best-effort).
+ *
+ * Резолвит M-баг: список тредов ВИРТУАЛИЗИРОВАН (в DOM единовременно ~14 строк), а
+ * непрочитанные бейджи у верхних (недавно прочитанных) тредов часто отсутствуют — простое
+ * чтение layout один раз видит только первые тени тредов и может решить «нет непрочитанных»
+ * при 100+ реальных. Чекбокс-фильтр — самый надёжный источник истины: если он включён,
+ * КАЖДАЯ отрендеренная ячейка гарантированно непрочитана (проверено на живом DOM).
+ *
+ * @param {import('playwright').Frame | import('playwright').Page} frame
+ * @returns {Promise<boolean>} true — чекбокс найден и нажат; false — не найден/не видим (fallback на бейджи).
+ */
+export async function enableOnlyUnreadFilter(frame) {
+  const checkbox = frame.locator(CHAT_SELECTORS.threadList.onlyUnreadCheckbox);
+  const visible = await checkbox.isVisible().catch(() => false);
+  if (!visible) return false;
+
+  const clicked = await checkbox
+    .click({ timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!clicked) return false;
+
+  await frame.waitForTimeout(600).catch(() => {});
+  return true;
+}
+
+/**
+ * Собирает ПОЛНЫЙ список тредов, прокручивая виртуализированный список chatik и сливая
+ * снимки через mergeThreadsById. Без скролла listThreads видит только ~14 верхних строк
+ * (виртуализация DOM) — при 100+ тредах это давало ложное «нет новых сообщений».
+ *
+ * Резилентность: каждый шаг (innerHTML, evaluate-скролл, waitForTimeout) обёрнут в .catch,
+ * никогда не бросает — в худшем случае вернёт то, что успело накопиться.
+ *
+ * @param {import('playwright').Frame | import('playwright').Page} frame
+ * @param {import('playwright').Page} page
+ * @param {{ maxRounds?: number, settleMs?: number }} [opts]
+ * @returns {Promise<Array<{ chatId: string, href: string, unread: boolean, unreadCount: number }>>}
+ */
+export async function collectThreadsScrolling(frame, page, opts = {}) {
+  const { maxRounds = 80, settleMs = 700 } = opts;
+
+  let acc = [];
+  let stagnant = 0;
+  let round = 0;
+
+  for (; round < maxRounds; round += 1) {
+    const html = await frame
+      .locator(CHAT_SELECTORS.threadList.layout)
+      .innerHTML()
+      .catch(() => '');
+    const parsed = parseThreadList(html);
+    const before = acc.length;
+    acc = mergeThreadsById(acc, parsed);
+    const grew = acc.length > before;
+
+    // Прокручиваем виртуализированный контейнер списка до конца (ближайший скроллящийся
+    // предок ячейки треда) — верифицированная на живом DOM стратегия.
+    const scrolled = await frame
+      .evaluate(() => {
+        const cell = document.querySelector('[data-qa^="chatik-open-chat-"]');
+        let el = cell;
+        while (el && el !== document.body) {
+          const oy = getComputedStyle(el).overflowY;
+          if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
+            const prev = el.scrollTop; el.scrollTop = el.scrollHeight; return el.scrollTop !== prev;
+          }
+          el = el.parentElement;
+        }
+        return false;
+      })
+      .catch(() => false);
+
+    await page.waitForTimeout(settleMs).catch(() => {});
+
+    if (grew) {
+      stagnant = 0;
+    } else {
+      stagnant += 1;
+      if (!scrolled) break; // список полностью загружен / не скроллится — дальше нечего ждать
+      if (stagnant >= 2) break; // два подряд раунда без роста — считаем список исчерпанным
+    }
+  }
+
+  if (round >= maxRounds) {
+    console.log('[messages] Достигнут лимит прокрутки списка тредов (maxRounds) — список мог быть усечён');
+  }
+
+  return acc;
 }
 
 /**
@@ -185,11 +277,22 @@ export async function processUnread(page, opts = {}) {
     return { processed: 0, replied: 0, skipped: 0, manual: 0, errors: 0, chatFound: false, loggedOut };
   }
 
-  // 2. Список тредов. По умолчанию — только непрочитанные (дёшево). С includeRead —
-  //    все треды (чтобы поймать employer-last в уже «прочитанных»); decideReply отсеет
-  //    те, где последнее сообщение наше или системное.
-  const threads = await listThreads(frame);
-  const targets = includeRead ? threads : threads.filter((t) => t.unread === true);
+  // 2. Список тредов. По умолчанию — только непрочитанные: включаем чекбокс-фильтр
+  //    «только непрочитанные» (если он есть) и прокручиваем виртуализированный список —
+  //    без скролла listThreads видел бы только ~14 верхних строк DOM и мог решить
+  //    «нет непрочитанных» при 100+ реальных. С includeRead — все треды (чтобы поймать
+  //    employer-last в уже «прочитанных»); decideReply отсеет те, где последнее сообщение
+  //    наше или системное.
+  const filterEnabled = includeRead ? false : await enableOnlyUnreadFilter(frame);
+  const threads = await collectThreadsScrolling(frame, page);
+  const targets = includeRead
+    ? threads
+    : filterEnabled
+      // Чекбокс-фильтр гарантирует: каждая отрендеренная ячейка непрочитана (бейджи могут
+      // отставать от рендера, поэтому доп. фильтрацию по unread здесь не делаем).
+      ? threads
+      // Fallback: чекбокса нет на странице — используем старое поведение по бейджам.
+      : threads.filter((t) => t.unread === true);
   console.log(
     `[messages] ${account ? `[${account}] ` : ''}` +
     (includeRead

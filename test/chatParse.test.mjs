@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseThreadList, parseThreadMessages, lastEmployerMessage } from '../src/lib/chatParse.js';
+import { parseThreadList, parseThreadMessages, lastEmployerMessage, mergeThreadsById } from '../src/lib/chatParse.js';
 
 // Загружаем синтетическую фикстуру списка тредов (PII-free, выдуманные данные)
 const fixtureHtml = readFileSync(
@@ -277,4 +277,81 @@ test('lastEmployerMessage: битые/null элементы пропускают
     { msgId: '2', author: 'employer', text: 'Когда удобно созвониться?' },
   ];
   assert.equal(lastEmployerMessage(msgs), 'Когда удобно созвониться?');
+});
+
+// ===========================================================================
+// mergeThreadsById
+// ===========================================================================
+
+test('mergeThreadsById: дедуплицирует по chatId между двумя снимками', () => {
+  const acc = [
+    { chatId: '1', href: '/chat/1', unread: false, unreadCount: 0 },
+    { chatId: '2', href: '/chat/2', unread: false, unreadCount: 0 },
+  ];
+  const next = [
+    { chatId: '2', href: '/chat/2', unread: false, unreadCount: 0 },
+    { chatId: '3', href: '/chat/3', unread: true, unreadCount: 1 },
+  ];
+  const merged = mergeThreadsById(acc, next);
+  assert.equal(merged.length, 3, 'должно быть 3 уникальных треда');
+  assert.deepEqual(merged.map((t) => t.chatId), ['1', '2', '3']);
+});
+
+test('mergeThreadsById: сохраняет порядок первого появления', () => {
+  const acc = [{ chatId: '10', href: '/chat/10', unread: false, unreadCount: 0 }];
+  const next = [
+    { chatId: '20', href: '/chat/20', unread: false, unreadCount: 0 },
+    { chatId: '10', href: '/chat/10', unread: true, unreadCount: 2 },
+  ];
+  const merged = mergeThreadsById(acc, next);
+  assert.deepEqual(merged.map((t) => t.chatId), ['10', '20'], 'chatId=10 должен остаться первым (первое появление)');
+});
+
+test('mergeThreadsById: unread агрегируется через OR (прочитан → непрочитан = непрочитан)', () => {
+  const acc = [{ chatId: '5', href: '/chat/5', unread: false, unreadCount: 0 }];
+  const next = [{ chatId: '5', href: '/chat/5', unread: true, unreadCount: 3 }];
+  const merged = mergeThreadsById(acc, next);
+  assert.equal(merged[0].unread, true, 'если тред где-то помечен непрочитанным — сохраняем это');
+});
+
+test('mergeThreadsById: unreadCount агрегируется через max', () => {
+  const acc = [{ chatId: '5', href: '/chat/5', unread: true, unreadCount: 7 }];
+  const next = [{ chatId: '5', href: '/chat/5', unread: true, unreadCount: 3 }];
+  const merged = mergeThreadsById(acc, next);
+  assert.equal(merged[0].unreadCount, 7, 'unreadCount должен быть максимумом из снимков');
+});
+
+test('mergeThreadsById: элементы без chatId пропускаются', () => {
+  const acc = [];
+  const next = [
+    { href: '/chat/x', unread: true, unreadCount: 1 },
+    null,
+    undefined,
+    { chatId: '', href: '/chat/empty', unread: true, unreadCount: 1 },
+    { chatId: '99', href: '/chat/99', unread: false, unreadCount: 0 },
+  ];
+  const merged = mergeThreadsById(acc, next);
+  assert.equal(merged.length, 1, 'только элемент с truthy chatId должен попасть в результат');
+  assert.equal(merged[0].chatId, '99');
+});
+
+test('mergeThreadsById: не-массив acc → трактуется как []', () => {
+  const merged = mergeThreadsById(null, [{ chatId: '1', href: '/chat/1', unread: false, unreadCount: 0 }]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].chatId, '1');
+});
+
+test('mergeThreadsById: не-массив next → возвращает acc без изменений', () => {
+  const acc = [{ chatId: '1', href: '/chat/1', unread: false, unreadCount: 0 }];
+  assert.deepEqual(mergeThreadsById(acc, null), acc);
+  assert.deepEqual(mergeThreadsById(acc, undefined), acc);
+  assert.deepEqual(mergeThreadsById(acc, 'строка'), acc);
+  assert.deepEqual(mergeThreadsById(acc, 42), acc);
+  assert.deepEqual(mergeThreadsById(acc, {}), acc);
+});
+
+test('mergeThreadsById: оба аргумента мусор → не бросает, возвращает []', () => {
+  assert.deepEqual(mergeThreadsById(null, undefined), []);
+  assert.deepEqual(mergeThreadsById(undefined, 'x'), []);
+  assert.deepEqual(mergeThreadsById({}, null), []);
 });

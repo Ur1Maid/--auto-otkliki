@@ -197,6 +197,45 @@ export function parseThreadMessages(html) {
 }
 
 /**
+ * Сливает несколько снимков списка тредов (из скролла виртуализированного списка) в один
+ * дедуплицированный массив по chatId, сохраняя порядок первого появления. unread/unreadCount
+ * агрегируются оптимистично (если тред где-то помечен непрочитанным — сохраняем это).
+ *
+ * @param {Array<{chatId: string, href: string, unread: boolean, unreadCount: number}>} acc — уже накопленное
+ * @param {Array<{chatId: string, href: string, unread: boolean, unreadCount: number}>} next — новый снимок
+ * @returns {Array<{chatId: string, href: string, unread: boolean, unreadCount: number}>}
+ */
+export function mergeThreadsById(acc, next) {
+  const result = Array.isArray(acc) ? acc.slice() : [];
+  if (!Array.isArray(next)) return result;
+
+  const indexById = new Map();
+  result.forEach((t, i) => {
+    if (t && typeof t === 'object' && t.chatId) indexById.set(t.chatId, i);
+  });
+
+  for (const item of next) {
+    if (!item || typeof item !== 'object' || !item.chatId) continue;
+
+    const existingIdx = indexById.get(item.chatId);
+    if (existingIdx === undefined) {
+      result.push(item);
+      indexById.set(item.chatId, result.length - 1);
+      continue;
+    }
+
+    const existing = result[existingIdx];
+    result[existingIdx] = {
+      ...existing,
+      unread: Boolean(existing.unread || item.unread),
+      unreadCount: Math.max(existing.unreadCount || 0, item.unreadCount || 0),
+    };
+  }
+
+  return result;
+}
+
+/**
  * Возвращает текст последнего сообщения с author==='employer' из массива сообщений.
  * Принимает уже разобранный массив (результат parseThreadMessages), а не сырой HTML —
  * это делает функцию чистой и переиспользуемой.
