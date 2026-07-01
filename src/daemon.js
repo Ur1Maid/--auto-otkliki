@@ -220,7 +220,11 @@ export async function runMessagesPass(opts, report, tracker) {
         ? (preview) => confirm(`[daemon] Отправить ответ в чате?\n${preview}\n`)
         : undefined;
 
-      const result = await processUnread(page, {
+      // Два прохода по одному page/tracker: список чата виртуализирован, и часть непрочитанных
+      // тредов (ленивый скролл/новоприбывшие за время обработки) может не попасть в первый снимок.
+      // tracker обеспечивает идемпотентность — во втором проходе уже обработанные треды не трогаются
+      // повторно, поэтому агрегируем счётчики обоих проходов без риска задвоить реальные ответы.
+      const processUnreadOpts = {
         account,
         dryRun: opts.dryRun,
         replyAuto: opts.replyAuto,
@@ -228,7 +232,24 @@ export async function runMessagesPass(opts, report, tracker) {
         deepSeekContext,
         tracker,
         confirmFn,
-      });
+      };
+
+      const pass1 = await processUnread(page, processUnreadOpts);
+      let pass2;
+      if (!pass1.loggedOut && pass1.chatFound !== false) {
+        console.log(`[daemon] [${account}] Сообщения: итерация 2/2 — перепроверяю непрочитанные…`);
+        pass2 = await processUnread(page, processUnreadOpts);
+      }
+
+      const result = {
+        processed: (pass1.processed || 0) + (pass2 ? pass2.processed || 0 : 0),
+        replied: (pass1.replied || 0) + (pass2 ? pass2.replied || 0 : 0),
+        skipped: (pass1.skipped || 0) + (pass2 ? pass2.skipped || 0 : 0),
+        manual: (pass1.manual || 0) + (pass2 ? pass2.manual || 0 : 0),
+        errors: (pass1.errors || 0) + (pass2 ? pass2.errors || 0 : 0),
+        chatFound: Boolean(pass1.chatFound) || Boolean(pass2 && pass2.chatFound),
+        loggedOut: Boolean(pass1.loggedOut) || Boolean(pass2 && pass2.loggedOut),
+      };
 
       console.log(
         `[daemon] [${account}] Сообщения: обработано ${result.processed}, ` +
