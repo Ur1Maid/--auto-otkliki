@@ -47,6 +47,7 @@ import {
   COLLECT_LOGGED_OUT,
   COLLECT_EMPTY_SEARCH,
 } from './lib/collectState.js';
+import { detectAntiBot, RUN_STATE_CAPTCHA } from './lib/runState.js';
 import { withTimeout } from './lib/withTimeout.js';
 import { buildRunCounters } from './lib/runCounters.js';
 
@@ -77,6 +78,13 @@ const COLLECT_PAGE_TIMEOUT = Symbol('collect-page-timeout');
 const PAGE_LOAD_ATTEMPTS = 3;
 // Базовая пауза между попытками (умножается на номер попытки).
 const PAGE_RETRY_BACKOFF_MS = 3000;
+// Антибот/капча на пустой странице выдачи (M20.x, «чиним отклики»): даём оператору
+// ограниченное время решить капчу вручную в открытом (headful) окне браузера, прежде чем сдаться.
+const CAPTCHA_WAIT_TOTAL_MS = 180000;
+const CAPTCHA_POLL_MS = 5000;
+// Машинный предел бесплодных раундов «решено, но пусто» на одной странице (страховка от
+// бесконечного цикла, если после решения капчи карточки так и не отрисовались).
+const CAPTCHA_MAX_EMPTY_ROUNDS = 3;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
@@ -267,8 +275,14 @@ async function loadKnowledgeBase(directory) {
 // Все шаги best-effort — единичный сбой страницы возвращает пустой список (сбор продолжится
 // или завершится с частичным пулом), не роняет collectFromSearch.
 async function loadSearchPage(page, nextUrl) {
-  await page.goto(nextUrl.toString(), { waitUntil: 'domcontentloaded' }).catch(() => {});
+  // 'commit' вместо 'domcontentloaded' (чинили M20.x): антибот-проверка hh.ru не всегда
+  // догружает DOM до состояния domcontentloaded — goto с этим waitUntil висел ~30с.
+  // 'commit' возвращается сразу по приходу ответа сервера; дальше — ограниченное ожидание
+  // карточек ниже (не бесконечное), так что и успех, и неудача теперь быстрые.
+  await page.goto(nextUrl.toString(), { waitUntil: 'commit' }).catch(() => {});
   await dismissHarmlessPopups(page);
+  // Ждём появления карточек выдачи под таймаутом (капча/медленная выдача не вешают сбор).
+  await page.waitForSelector('[data-qa="vacancy-serp__vacancy"]', { timeout: 15000 }).catch(() => {});
   await page.waitForTimeout(900);
 
   // Карточки выдачи: URL + флаг удалёнки + компания (M3.8) + текст плашки совпадения (M3.3).
@@ -303,6 +317,29 @@ async function loadSearchPage(page, nextUrl) {
   return [...cards, ...flat.map((url) => ({ url, remote: false }))];
 }
 
+// Даёт оператору bounded-время решить антибот-капчу вручную в открытом (headful) окне
+// браузера (M20.x, «чиним отклики»): не автоматизирует и не обходит капчу — только ждёт
+// и поллит появление карточек выдачи. Никогда не бросает и не виснет дольше отведённого
+// бюджета (все Playwright-вызовы `.catch`-заглушены). Возвращает true, если карточки
+// появились (капча решена), false — если бюджет исчерпан.
+async function waitForCaptchaSolved(page, totalMs = CAPTCHA_WAIT_TOTAL_MS, pollMs = CAPTCHA_POLL_MS) {
+  console.log(`Капча — решите проверку в открытом окне (жду до ${Math.round(totalMs / 1000)}с)…`);
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    // 5-секундный waitForSelector одновременно и интервал поллинга, и сама проверка.
+    const appeared = await page
+      .waitForSelector('[data-qa="vacancy-serp__vacancy"]', { timeout: pollMs })
+      .then(() => true)
+      .catch(() => false);
+    if (appeared) {
+      console.log('Капча решена — продолжаю сбор.');
+      return true;
+    }
+  }
+  console.log('Капча не решена за отведённое время — прекращаю сбор.');
+  return false;
+}
+
 async function collectFromSearch(page, searchUrl, limit) {
   const seen = new Set();   // канонические URL, уже собранные (дедуп во время сбора)
   const items = [];         // сырые карточки { url, remote } в DOM-порядке
@@ -310,6 +347,7 @@ async function collectFromSearch(page, searchUrl, limit) {
   baseUrl.searchParams.set('per_page', '100');
   let pageIndex = Number(baseUrl.searchParams.get('page') || 0);
   let pagesWithoutNewVacancies = 0;
+  let captchaGaveUp = false; // капча не решена за отведённое время — прекращаем сбор совсем
 
   while (seen.size < limit && pagesWithoutNewVacancies < 2) {
     const nextUrl = new URL(baseUrl);
@@ -321,6 +359,11 @@ async function collectFromSearch(page, searchUrl, limit) {
     // Ретраи (M18.5): зависание или пустая ПЕРВАЯ страница почти всегда транзиентны —
     // даём странице ещё шанс перед тем, как сдаться.
     let pageItems = COLLECT_PAGE_TIMEOUT;
+    // Машинный предел на цикл «капча решена, но страница всё ещё пустая» (M20.x): если после
+    // решения капчи $$eval вернул пусто (SPA-перерисовка / капча пере-взвелась), мы снова
+    // ловим капчу и снова ждём — без этого счётчика цикл завершается только когда человек
+    // перестанет решать. Ограничиваем N бесплодными раундами на одной странице.
+    let captchaEmptyRounds = 0;
     for (let attempt = 1; attempt <= PAGE_LOAD_ATTEMPTS; attempt += 1) {
       pageItems = await withTimeout(
         loadSearchPage(page, nextUrl),
@@ -332,6 +375,39 @@ async function collectFromSearch(page, searchUrl, limit) {
       // а не «нет вакансий». Пустая страница ПОСЛЕ реальных результатов (seen>0) не ретраится —
       // это конец выдачи, её ловит pagesWithoutNewVacancies ниже.
       const emptyWhileNothingCollected = !timedOut && pageItems.length === 0 && seen.size === 0;
+
+      // Пустая страница, пока ничего не собрано, может быть не троттлингом, а антибот-капчей
+      // (M20.x). Проверяем текст страницы (untrusted — только матчится detectAntiBot, наружу/в
+      // лог не эхо-ится) и, если это капча, даём оператору bounded-время решить её вручную в
+      // открытом окне, не тратя на это обычную попытку-ретрай.
+      if (emptyWhileNothingCollected) {
+        const antiBotText = await getVisibleText(page);
+        if (detectAntiBot(antiBotText)) {
+          captchaEmptyRounds += 1;
+          if (captchaEmptyRounds > CAPTCHA_MAX_EMPTY_ROUNDS) {
+            // Страница остаётся пустой даже после нескольких решений капчи — дальше ждать
+            // бессмысленно (защита от бесконечного цикла). Прекращаем сбор с накопленным.
+            console.log(`Капча: страница осталась пустой после ${CAPTCHA_MAX_EMPTY_ROUNDS} решений — прекращаю сбор, возвращаю собранное (${seen.size}).`);
+            pageItems = [];
+            captchaGaveUp = true;
+            break;
+          }
+          const solved = await waitForCaptchaSolved(page);
+          if (solved) {
+            // Капча решена — перечитываем эту же страницу выдачи, не считая это неудачной
+            // попыткой (декремент attempt компенсирует инкремент цикла for).
+            attempt -= 1;
+            continue;
+          }
+          // Оператор не успел решить капчу — прекращаем сбор с уже накопленным (обычно
+          // пустым) пулом; processAccount распознает 0 вакансий и напишет captcha-хартбит.
+          console.log(`Страница ${pageIndex + 1} выдачи: капча не решена — прекращаю сбор, возвращаю собранное (${seen.size}).`);
+          pageItems = [];
+          captchaGaveUp = true;
+          break;
+        }
+      }
+
       if (!timedOut && !emptyWhileNothingCollected) break; // успех — есть карточки (или конец выдачи)
       if (attempt < PAGE_LOAD_ATTEMPTS) {
         console.log(
@@ -341,6 +417,7 @@ async function collectFromSearch(page, searchUrl, limit) {
         await page.waitForTimeout(PAGE_RETRY_BACKOFF_MS * attempt).catch(() => {});
       }
     }
+    if (captchaGaveUp) break; // сдались на капче — выходим с уже накопленным (частичным) пулом
     if (pageItems === COLLECT_PAGE_TIMEOUT) {
       console.log(`Страница ${pageIndex + 1} выдачи зависла (>${Math.round(COLLECT_PAGE_TIMEOUT_MS / 1000)}с) после ${PAGE_LOAD_ATTEMPTS} попыток — прекращаю сбор, возвращаю собранное (${seen.size}).`);
       break;
@@ -1924,6 +2001,28 @@ async function processAccount(account, args, sharedDeepSeekContext) {
     const { urls: vacancies, remoteSet, matchByUrl } = collected;
 
     if (vacancies.length === 0) {
+      // Приоритет: антибот/капча — самая конкретная причина простоя (M20.x, «чиним отклики»).
+      // Проверяем ДО общей диагностики (разлогин/пустой поиск/троттлинг) — капча важнее.
+      // Текст страницы — untrusted (prompt-injection вектор): матчится только внутри
+      // detectAntiBot, наружу/в лог НЕ эхо-ится (та же дисциплина, что и readCollectProblem).
+      const antiBotText = await getVisibleText(page);
+      if (detectAntiBot(antiBotText)) {
+        console.log(
+          `[${account}] hh.ru показывает антибот-проверку («не робот»). ` +
+          'Решите капчу в открытом окне браузера и перезапустите отклики.',
+        );
+        await writeHeartbeatFile(account, {
+          task: 'apply',
+          phase: RUN_PHASES.ERROR,
+          index: 0,
+          total: 0,
+          lastEvent: 'captcha',
+          state: RUN_STATE_CAPTCHA,
+          ts: new Date(),
+          counts: runCounts(),
+        });
+        return;
+      }
       // Пул пуст. Раньше здесь был только текст без причины и БЕЗ error-хартбита — оператор
       // (и панель) не понимали, почему нет откликов. Внутренний per-page таймаут сбора
       // (collectFromSearch исчерпал ретраи → вернул 0) не проходит через таймаут-ветку выше,
