@@ -67,6 +67,11 @@ const COLLECT_TIMEOUT = Symbol('collect-timeout');
 // прекращаем сбор с уже накопленным частичным пулом (не роняем шаг, не «таймаутим» всё).
 const COLLECT_PAGE_TIMEOUT_MS = 30000;
 const COLLECT_PAGE_TIMEOUT = Symbol('collect-page-timeout');
+// Ретраи загрузки одной страницы выдачи (M18.5): страница выдачи hh.ru иногда транзиентно
+// виснет/отдаёт пусто — один медленный ответ не должен убивать весь сбор.
+const PAGE_LOAD_ATTEMPTS = 3;
+// Базовая пауза между попытками (умножается на номер попытки).
+const PAGE_RETRY_BACKOFF_MS = 3000;
 const envPath = path.join(rootDir, '.env');
 const deepSeekDebugPath = path.join(logsDir, 'deepseek-debug.jsonl');
 const scoreCachePath = path.join(dataDir, 'score-cache.json');
@@ -308,13 +313,31 @@ async function collectFromSearch(page, searchUrl, limit) {
 
     // Пер-страничный таймаут-гард (M18.4): одна зависшая страница не должна съедать весь
     // бюджет сбора — при превышении прекращаем с уже накопленным частичным пулом.
-    const pageItems = await withTimeout(
-      loadSearchPage(page, nextUrl),
-      COLLECT_PAGE_TIMEOUT_MS,
-      COLLECT_PAGE_TIMEOUT,
-    );
+    // Ретраи (M18.5): зависание или пустая ПЕРВАЯ страница почти всегда транзиентны —
+    // даём странице ещё шанс перед тем, как сдаться.
+    let pageItems = COLLECT_PAGE_TIMEOUT;
+    for (let attempt = 1; attempt <= PAGE_LOAD_ATTEMPTS; attempt += 1) {
+      pageItems = await withTimeout(
+        loadSearchPage(page, nextUrl),
+        COLLECT_PAGE_TIMEOUT_MS,
+        COLLECT_PAGE_TIMEOUT,
+      );
+      const timedOut = pageItems === COLLECT_PAGE_TIMEOUT;
+      // Пустая страница, пока НИЧЕГО не собрано, — почти всегда транзиентный троттлинг hh.ru,
+      // а не «нет вакансий». Пустая страница ПОСЛЕ реальных результатов (seen>0) не ретраится —
+      // это конец выдачи, её ловит pagesWithoutNewVacancies ниже.
+      const emptyWhileNothingCollected = !timedOut && pageItems.length === 0 && seen.size === 0;
+      if (!timedOut && !emptyWhileNothingCollected) break; // успех — есть карточки (или конец выдачи)
+      if (attempt < PAGE_LOAD_ATTEMPTS) {
+        console.log(
+          `Страница ${pageIndex + 1} выдачи ${timedOut ? `зависла (>${Math.round(COLLECT_PAGE_TIMEOUT_MS / 1000)}с)` : 'вернулась пустой'} ` +
+          `(попытка ${attempt}/${PAGE_LOAD_ATTEMPTS}) — повтор через ${Math.round((PAGE_RETRY_BACKOFF_MS * attempt) / 1000)}с.`,
+        );
+        await page.waitForTimeout(PAGE_RETRY_BACKOFF_MS * attempt).catch(() => {});
+      }
+    }
     if (pageItems === COLLECT_PAGE_TIMEOUT) {
-      console.log(`Страница ${pageIndex + 1} выдачи зависла (>${Math.round(COLLECT_PAGE_TIMEOUT_MS / 1000)}с) — прекращаю сбор, возвращаю собранное (${seen.size}).`);
+      console.log(`Страница ${pageIndex + 1} выдачи зависла (>${Math.round(COLLECT_PAGE_TIMEOUT_MS / 1000)}с) после ${PAGE_LOAD_ATTEMPTS} попыток — прекращаю сбор, возвращаю собранное (${seen.size}).`);
       break;
     }
 
