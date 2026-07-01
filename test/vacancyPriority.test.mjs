@@ -68,6 +68,45 @@ test('prioritizeRemoteFirst: не-массив на входе → пустой 
   assert.deepEqual(prioritizeRemoteFirst('foo'), []);
 });
 
+test('prioritizeRemoteFirst: внутри группы выше matchPercent идёт раньше', () => {
+  const out = prioritizeRemoteFirst([
+    { url: V(1), remote: true, matchPercent: 60 },
+    { url: V(2), remote: true, matchPercent: 95 },
+    { url: V(3), remote: false, matchPercent: 100 },
+    { url: V(4), remote: true, matchPercent: 80 },
+  ]);
+  // remote по match desc: V2(95), V4(80), V1(60); затем не-remote: V3(100)
+  assert.deepEqual(out, [V(2), V(4), V(1), V(3)]);
+});
+
+test('prioritizeRemoteFirst: карточки без плашки идут в конец своей группы', () => {
+  const out = prioritizeRemoteFirst([
+    { url: V(1), remote: false },                    // без match
+    { url: V(2), remote: false, matchPercent: 70 },
+    { url: V(3), remote: false, matchPercent: 40 },
+  ]);
+  assert.deepEqual(out, [V(2), V(3), V(1)]);
+});
+
+test('prioritizeRemoteFirst: remote приоритетнее matchPercent (группа важнее)', () => {
+  const out = prioritizeRemoteFirst([
+    { url: V(1), remote: false, matchPercent: 100 },
+    { url: V(2), remote: true, matchPercent: 30 },
+  ]);
+  // удалёнка вперёд, даже при меньшем проценте
+  assert.deepEqual(out, [V(2), V(1)]);
+});
+
+test('prioritizeRemoteFirst: match берётся максимальный по вхождениям одного URL', () => {
+  const out = prioritizeRemoteFirst([
+    { url: V(1), remote: false, matchPercent: 40 },
+    { url: V(2), remote: false, matchPercent: 50 },
+    { url: V(1), remote: false, matchPercent: 90 }, // тот же URL, выше match
+  ]);
+  // V(1) поднимается до 90 → раньше V(2, 50)
+  assert.deepEqual(out, [V(1), V(2)]);
+});
+
 // --- looksRemoteInText ---
 
 test('looksRemoteInText: ловит явные формулировки удалёнки', () => {

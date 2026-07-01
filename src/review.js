@@ -24,6 +24,8 @@ import { detectFieldKind, getMainQuestion, isSalaryContext } from './lib/fields.
 import { extractResumeKeywords, pickKnowledgeChunks } from './lib/knowledge.js';
 import { normalizeHhUrl, normalizeVacancyUrl } from './lib/urls.js';
 import { prioritizeRemoteFirst, looksRemoteInText } from './lib/vacancyPriority.js';
+import { parseMatchPercent } from './lib/matchBadge.js';
+import { dedupeReposts } from './lib/vacancyDedup.js';
 import { randomDelayMs } from './lib/pacing.js';
 import { looksLikeEmployerVoice, matchesAnyPattern, optionMatches } from './lib/answers.js';
 import { callDeepSeek, redactSecrets } from './lib/deepseek.js';
@@ -259,17 +261,26 @@ async function loadSearchPage(page, nextUrl) {
   await dismissHarmlessPopups(page);
   await page.waitForTimeout(900);
 
-  // Карточки выдачи: URL + флаг удалёнки (метка hh.ru).
+  // Карточки выдачи: URL + флаг удалёнки + компания (M3.8) + текст плашки совпадения (M3.3).
   const cards = await page.$$eval('[data-qa="vacancy-serp__vacancy"]', (nodes) =>
     nodes.map((card) => {
       const remote = !!card.querySelector('[data-qa="vacancy-label-work-schedule-remote"]');
-      const title = card.querySelector('a[data-qa="serp-item__title"]');
-      let url = title ? title.href : '';
+      const titleEl = card.querySelector('a[data-qa="serp-item__title"]');
+      let url = titleEl ? titleEl.href : '';
       if (!/\/vacancy\/\d+/.test(url)) {
         const alt = card.querySelector('a[href*="/vacancy/"]');
         if (alt) url = alt.href;
       }
-      return { url, remote };
+      // Компания — стабильный data-qa (M3.8, дедуп репостов).
+      const empEl = card.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]');
+      const company = empEl ? (empEl.textContent || '').trim() : '';
+      const title = titleEl ? (titleEl.textContent || '').trim() : '';
+      // Плашка «Подходит по навыкам на N%» — БЕЗ data-qa (хеш-класс), поэтому вынимаем
+      // подстроку из текста карточки; процент парсит Node (matchBadge.parseMatchPercent).
+      // Терпимо к неразрывным пробелам ( ) между словами.
+      const badge = (card.textContent || '').match(/Подходит[\s ]+по[\s ]+навыкам[\s ]+на[\s ]*\d+[\s ]*%/);
+      const matchText = badge ? badge[0] : '';
+      return { url, remote, company, title, matchText };
     })
   ).catch(() => []);
 
@@ -322,15 +333,24 @@ async function collectFromSearch(page, searchUrl, limit) {
     pageIndex += 1;
   }
 
-  // Приоритет: удалёнка вперёд, без отсева — на эти вакансии откликаемся в первую очередь.
-  const ordered = prioritizeRemoteFirst(items);
+  // Плашка совпадения (M3.3): текст → число. Дедуп репостов по title+company (M3.8):
+  // одна вакансия под разными id/url схлопывается (пустая company — не трогаем).
+  const enriched = items.map((item) => ({ ...item, matchPercent: parseMatchPercent(item.matchText || '') }));
+  const deduped = dedupeReposts(enriched);
+  const removedReposts = enriched.length - deduped.length;
+
+  // Приоритет: удалёнка вперёд, внутри — выше совпадение раньше; без отсева.
+  const ordered = prioritizeRemoteFirst(deduped);
   const remoteSet = new Set(
-    items
+    deduped
       .filter((item) => item.remote === true)
       .map((item) => normalizeVacancyUrl(item.url || ''))
       .filter(Boolean),
   );
-  console.log(`Приоритизация: всего ${ordered.length}, из них удалёнка ${remoteSet.size} (отклик в первую очередь).`);
+  console.log(
+    `Приоритизация: всего ${ordered.length}, из них удалёнка ${remoteSet.size} ` +
+    `(отклик в первую очередь${removedReposts > 0 ? `; репостов схлопнуто ${removedReposts}` : ''}).`,
+  );
   return { urls: ordered, remoteSet };
 }
 

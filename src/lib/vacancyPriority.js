@@ -14,34 +14,55 @@ function safeNormalize(url) {
   }
 }
 
+/** Число совпадения (плашка M3.3) → 0..100 или null, если сигнала нет. */
+function toMatch(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 /**
  * Упорядочивает вакансии: сначала удалёнка, потом остальные — без отсева.
  * Нормализует и дедуплицирует URL до канона /vacancy/<id>. Если один и тот же
  * URL встречается и как remote, и как не-remote, он считается remote (OR по
- * вхождениям) и попадает в приоритетную группу. Порядок внутри группы — по
- * первому появлению (стабильно).
+ * вхождениям) и попадает в приоритетную группу.
  *
- * @param {Array<{ url?: string, remote?: boolean }>} items — сырые карточки из DOM
- * @returns {string[]} канонические URL: сначала удалёнка, затем остальные
+ * Внутри каждой группы (удалёнка / остальные) — по УБЫВАНИЮ плашки совпадения
+ * hh.ru «Подходит по навыкам на N%» (M3.3, поле `matchPercent`): выше совпадение —
+ * раньше отклик. Карточки без плашки (`null`) идут в конец группы. При равном
+ * проценте (и у всех без плашки) сохраняется исходный DOM-порядок (стабильно).
+ * Это только ПОРЯДОК — ни одна вакансия не отсекается (инвариант M3.1 сохранён).
+ *
+ * @param {Array<{ url?: string, remote?: boolean, matchPercent?: number|null }>} items
+ * @returns {string[]} канонические URL: удалёнка (по match desc) → остальные (по match desc)
  */
 export function prioritizeRemoteFirst(items) {
-  const order = [];               // канонические URL в порядке первого появления
-  const remoteByUrl = new Map();  // url → boolean (OR по вхождениям)
+  const order = [];         // канонические URL в порядке первого появления
+  const info = new Map();   // url → { remote:boolean, match:number|null }
 
   for (const item of Array.isArray(items) ? items : []) {
     const url = safeNormalize(item?.url);
     if (!url) continue;
-    if (!remoteByUrl.has(url)) {
+    const match = toMatch(item?.matchPercent);
+    if (!info.has(url)) {
       order.push(url);
-      remoteByUrl.set(url, item?.remote === true);
-    } else if (item?.remote === true) {
-      remoteByUrl.set(url, true);
+      info.set(url, { remote: item?.remote === true, match });
+    } else {
+      const cur = info.get(url);
+      if (item?.remote === true) cur.remote = true;
+      if (match != null && (cur.match == null || match > cur.match)) cur.match = match;
     }
   }
 
-  const remote = order.filter((url) => remoteByUrl.get(url) === true);
-  const rest = order.filter((url) => remoteByUrl.get(url) !== true);
-  return [...remote, ...rest];
+  const idx = new Map(order.map((url, i) => [url, i])); // индекс появления — для стабильности
+  const byPriority = (a, b) => {
+    const ia = info.get(a);
+    const ib = info.get(b);
+    if (ia.remote !== ib.remote) return ia.remote ? -1 : 1;      // удалёнка вперёд
+    if (ia.match == null && ib.match != null) return 1;          // без плашки — в конец группы
+    if (ia.match != null && ib.match == null) return -1;
+    if (ia.match != null && ib.match != null && ia.match !== ib.match) return ib.match - ia.match; // выше match раньше
+    return idx.get(a) - idx.get(b);                              // равные — по DOM-порядку
+  };
+  return [...order].sort(byPriority);
 }
 
 /**
